@@ -1,0 +1,402 @@
+<html>
+
+<head>
+<title>Sunspots</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<!--script type="text/javascript" src="../openjpeg.js"></script-->
+<script type="text/javascript" src="../node_modules/chart.js/dist/Chart.bundle.js"></script>
+<script type="text/javascript">
+
+
+    function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+    var upper = 44;
+    var lower = 523;
+    var left = 20;
+    var right = 498;
+    var centerX = (right + left)/2
+    var centerY = (lower + upper)/2
+    var radius = ((lower - upper) + (right - left))/4
+    var mouseDown = false;
+    var lastMouseX = null;
+    var lastMouseY = null;
+	var butterfly = new Array();
+	
+    window.chartColors = {
+	    red: 'rgb(255, 99, 132)',
+	    orange: 'rgb(255, 159, 64)',
+	    yellow: 'rgb(255, 205, 86)',
+	    green: 'rgb(75, 192, 192)',
+	    blue: 'rgb(54, 162, 235)',
+	    purple: 'rgb(153, 102, 255)',
+	    grey: 'rgb(201, 203, 207)',
+	    black: 'rgb(0, 0, 0)'
+    };
+	
+    var color = Chart.helpers.color;
+	var plot_data = {
+		datasets: [{
+			label: 'Sunspots',
+			borderColor: window.chartColors.black,
+			backgroundColor: color(window.chartColors.black).alpha(0.2).rgbString(),
+			pointRadius:10,
+			data: butterfly
+		}]
+    }
+    butterfly_plot = null;
+
+    function handleMouseDown(event) {
+        mouseDown = true;
+        lastMouseX = event.clientX;
+        lastMouseY = event.clientY;
+        button = event.button;
+        if (event.button == 0 && !event.shiftKey) {
+            //console.log("uppper: ", upper);
+            //console.log("lower:", lower);
+            //console.log("left: ", left);
+            //console.log("right:", right);
+            if (upper == null) {
+                upper = lastMouseY;
+            } else if (lower == null) {
+                lower = lastMouseY;
+            } else if (left == null) {
+                left = lastMouseX;
+            } else if (right == null) {
+                right = lastMouseX;
+            } else {
+                if (lower > upper) {
+                    var upperTmp = lower;
+                    lower = upper;
+                    upper = upperTmp;
+                }
+                date = dateToYearFrac(new Date(document.getElementById("date").value));
+                if (Math.pow(lastMouseY - centerY, 2) + Math.pow(lastMouseX - centerX, 2) <= radius*radius) {
+                    lat = 180 * (upper - lastMouseY)/(upper - lower) - 90;
+                    long = (lastMouseX - centerX)/(centerX - left)
+                    long = Math.asin(long)*14/Math.PI;
+                    date += long/365.25;
+                    console.log("Date: ", date);
+                    console.log("Latitude:", lat);
+                    console.log("Longitude:", long);
+                    butterfly.push({
+					    x: date,
+					    y: lat});
+				    butterfly_plot.update();
+                    //window.requestAnimationFrame(plotButterfly);
+                }
+            }
+        } else if (event.button == 2 || (event.button == 0 && (event.shiftKey))) {
+            next();
+        }
+    }
+
+
+    function handleMouseUp(event) {
+        mouseDown = false;
+    }
+
+
+    function handleMouseMove(event) {
+        if (!mouseDown) {
+            return;
+        }
+		
+		
+	}
+
+    function handleKeyPress(event) {
+        if (event.key=="Enter") {
+            next();
+        }
+	}
+
+    /*
+	function plotButterfly() {
+		var canvas = document.getElementById("plot-canvas");
+			var yCoef = canvas.height / 180;
+			var minTime = 0;
+			var maxTime = 0;
+			if (butterfly != null && butterfly.length > 0) {
+				var i = Math.max(0, butterfly.length - 1000);
+				minTime = butterfly[i][0];
+				maxTime = butterfly[butterfly.length - 1][0];
+			}
+
+			var plotArea = new PlotArea(minTime, -90, maxTime, 90);
+			var plot = new Plot(canvas, plotArea);
+			if (butterfly != null) {
+				var plotData = new PlotData(PlotType.Rectangles, true);
+				plotData.setLineStyle(new LineStyle("white", null, null, null));
+				plotData.setWidth(20);
+				plotData.setHeight(20);
+				for (var i in butterfly) {
+					var time = butterfly[i][0];
+					var magnitude = butterfly[i][1];
+					plotData.addDataPoint(new DataPoint(time, magnitude), "white")
+				}
+				plot.addData(plotData);
+			}
+			plot.plot();
+	}*/
+
+    /*
+	function next() {
+		var date = new Date(document.getElementById("date").value);
+        const xhr = new XMLHttpRequest();
+        const url='https://api.helioviewer.org/v2/getJP2Image/?date='+dateToStr(date)+'T12:00:00Z&sourceId=6&imageScale=0.1';
+        xhr.open("GET", url);
+        xhr.mozResponseType = xhr.responseType = 'arraybuffer';
+        xhr.onreadystatechange = function(e) {
+            if (xhr.readyState !== 4)
+                return;
+            if (xhr.status !== 200 && xhr.status !== 0)
+                throw "Error in XHR response (status = "+xhr.status+")";
+            var buffer = (xhr.mozResponseArrayBuffer || xhr.mozResponse ||
+                  xhr.responseArrayBuffer || xhr.response);
+            var bytes = new Uint8Array(buffer);
+            var t0 = new Date().getTime();
+            var rgbImage = openjpeg(bytes, 'jp2');
+            console.log('---> openjpeg() total time: ', ((new Date().getTime()) - t0) + 'ms');
+            var canvas = document.getElementById('sun-canvas');
+            canvas.width = rgbImage.width;
+            canvas.height = rgbImage.height;
+            var pixelsPerChannel = rgbImage.width * rgbImage.height;
+            var ctx = canvas.getContext('2d');
+            var rgbaImage = ctx.createImageData(rgbImage.width, rgbImage.height);
+            var i = 0, j = 0;
+            while (i < rgbaImage.data.length && j < pixelsPerChannel) {
+                rgbaImage.data[i] = rgbImage.data[j]; // R
+                rgbaImage.data[i+1] = rgbImage.data[j + pixelsPerChannel]; // G
+                rgbaImage.data[i+2] = rgbImage.data[j + 2*pixelsPerChannel]; // B
+                rgbaImage.data[i+3] = 255; // A
+                // Next pixel
+                i += 4;
+                j += 1;
+            }
+            ctx.putImageData(rgbaImage, 0, 0);
+        }	
+        xhr.send();
+	
+		var step = parseInt(document.getElementById("step").value);
+		date.setDate(date.getDate() + step);
+		document.getElementById("date").value = date.getYear() + "-" + date.getMonth() + "-" + date.getDay();
+	}
+	*/
+
+
+    function downloadScreenshot(id) {
+    
+        const url='https://api.helioviewer.org/v2/downloadScreenshot/?id='+id;
+        console.log(url);
+        fetch(url)
+          .then(res=>{return res.blob()})
+          .then(blob=>{
+            var img = URL.createObjectURL(blob);
+            // Do whatever with the img
+            document.getElementById('sun').setAttribute('src', img);
+          })
+    
+        /*
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", url);
+        
+        xhr.mozResponseType = xhr.responseType = 'arraybuffer';
+        xhr.onreadystatechange = function(e) {
+            if (xhr.readyState !== 4)
+                return;
+            if (xhr.status !== 200 && xhr.status !== 0)
+                throw "Error in XHR response (status = "+xhr.status+")";
+            var buffer = (xhr.mozResponseArrayBuffer || xhr.mozResponse ||
+                  xhr.responseArrayBuffer || xhr.response);
+            var bytes = new Uint8Array(buffer);
+            
+            var reader = new PNGReader(buffer);
+	            reader.parse(function(err, png){
+		            if (err) throw err;
+		            console.log(png);
+                    var canvas = document.getElementById('sun-canvas');
+                    canvas.width = png.width;
+                    canvas.height = png.height;
+                    var pixelsPerChannel = png.width * png.height;
+                    var ctx = canvas.getContext('2d');
+                    ctx.putImageData(png.pixels, 0, 0);
+	            });            
+            
+        }	
+        xhr.send();
+        */
+    }
+    
+    function dateToYearFrac(date) {
+        var year = date.getFullYear();
+        var month = date.getMonth()+1;
+        var date = date.getDate();
+        var days = 0;
+        for (var m = 0; m < month; m++) {
+            if (m == 0 || m == 2 || m == 4 || m == 6 || m == 7 || m == 9 || m == 11) {
+                days += 31;
+            } else if (m == 3 || m == 5 || m == 8 || m == 10) {
+                days += 30;
+            } else {
+                days += 28;
+            }
+        }
+        days += date;
+        var yearFrac = parseFloat(year);
+        if (year % 4 == 0 && year % 100 != 0) {
+            yearFrac += days/366;
+        } else {
+            yearFrac += days/365;
+        }
+        return yearFrac;
+    }
+    
+    
+    function dateToStr(date) {
+        var yearStr = "" + date.getFullYear();
+        var monthStr = "" + (date.getMonth()+1);
+        if (monthStr.length < 2) {
+            monthStr = "0" + monthStr;
+        }
+        var dateStr = "" + (date.getDate());
+        if (dateStr.length < 2) {
+            dateStr = "0" + dateStr;
+        }
+        return yearStr + "-" + monthStr + "-" + dateStr;
+    }
+    
+    function requestSunImage() {
+		var date = new Date(document.getElementById("date").value);
+        const req = new XMLHttpRequest();
+        const url='https://api.helioviewer.org/v2/takeScreenshot/?date='+dateToStr(date)+'T12:00:00Z&layers=[7,1,100]&imageScale=4&eventLabels=false&x0=0&y0=0&width=500&height=500&watermark=true';
+        req.overrideMimeType("application/json");
+        req.open("GET", url);
+        req.onload = function(e) {
+            console.log(req.responseText);
+            var res = JSON.parse(req.responseText);
+            downloadScreenshot(res.id);
+        }
+        req.send();
+    }
+
+	function next() {
+		var date = new Date(document.getElementById("date").value);
+		var step = parseInt(document.getElementById("step").value);
+		date.setDate(date.getDate() + step);
+        console.log(date);
+		document.getElementById("date").value = dateToStr(date);
+	    requestSunImage();
+    	butterfly_plot.update();
+	}
+	
+	function init() {
+        lastMouseX = null;
+        lastMouseY = null;
+		document.getElementById("date").value = "1996-05-19";
+		requestSunImage();
+        document.getElementById('sun').onmousedown = handleMouseDown;
+        document.onkeypress = handleKeyPress;
+        document.getElementById("date").onchange = requestSunImage;
+        //document.onmouseup = handleMouseUp;
+        //document.onmousemove = handleMouseMove;
+        minDate = new Date(document.getElementById("date").min);
+        maxDate = new Date(document.getElementById("date").max);
+        console.log(minDate);
+        console.log(maxDate);
+
+        var ctx = document.getElementById("plot-canvas").getContext('2d');
+        
+        Chart.plugins.register({
+          beforeDraw: function(chartInstance) {
+            var ctx = chartInstance.chart.ctx;
+            ctx.fillStyle = "white";
+            ctx.fillRect(0, 0, chartInstance.chart.width, chartInstance.chart.height);
+          }
+        });        
+        butterfly_plot = Chart.Scatter(ctx, {
+				data: plot_data,
+				options: {
+				    legend: false,
+				    title: {
+					    display: true,
+					    text: 'Butterfly diagram'
+					},
+					scales: {
+						xAxes: [{
+							display: true,
+							scaleLabel: {
+								display: true,
+								labelString: 'Year'
+							}
+						}],
+						yAxes: [{
+							display: true,
+							scaleLabel: {
+								display: true,
+								labelString: 'Latitude'
+							}
+						}]
+					},
+                    backgroundColor: 'rgba(0, 0, 0, 255)'
+                }
+			});
+			
+	}
+
+</script>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+/* Create two equal columns that floats next to each other */
+.leftcolumn {
+    float: left;
+    width: 40%;
+    padding: 10px;
+    height: 300px; /* Should be removed. Only for demonstration */
+}
+.rightcolumn {
+    float: left;
+    width: 60%;
+    padding: 10px;
+    height: 300px; /* Should be removed. Only for demonstration */
+}
+
+/* Clear floats after the columns */
+.row:after {
+    content: "";
+    display: table;
+    clear: both;
+}
+</style>
+
+</head>
+
+
+<body onload="init();">
+	<label for="date">Date:</label>
+	<input id="date" type="date" value="1996-05-19" min="1996-05-19" max="2011-11-01"/>
+	<label for="step">Step (days):</label>
+	<input id="step" type="number" value="28" min="1" max="1000" step="30"/>
+	<button id="next" onclick="JavaScript:next()">Next</button>
+    <br/>
+    <div class="row">
+        <div class="leftcolumn">
+            <img id="sun" src=""/>
+            <!--canvas id="sun-canvas" style="border: none;" width="500" height="500"></canvas-->
+            <!--canvas id="plot-canvas" style="border: none;" width="1000" height="500"></canvas-->
+        </div>        
+        <div class="rightcolumn">
+            <canvas id="plot-canvas"></canvas>
+        </div>
+	<br/>
+	<!--<button id="save" onclick="JavaScript:save()">Save time series</button>-->
+</body>
+
+</html>
+
