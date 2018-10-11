@@ -274,6 +274,17 @@
         const url='https://api.helioviewer.org/v2/takeScreenshot/?date='+dateToStr(date)+'T12:00:00Z&layers=[7,1,100]&imageScale=4&eventLabels=false&x0=0&y0=0&width=500&height=500&watermark=true';
         req.overrideMimeType("application/json");
         req.open("GET", url);
+        //if (req.readyState !== 4)
+        //    document.write("Error" + req.readyState)
+        //if (req.status !== 200 && req.status !== 0)
+        //    document.write("Error2")
+        req.onerror = function(e) {
+            if(navigator.userAgent.indexOf("Chrome") != -1) {
+                document.write("To view this page, please download the CORS plugin using <a href ='https://chrome.google.com/webstore/detail/allow-control-allow-origi/nlfbmbojpeacfghkpbjhddihlkkiljbi?hl=en-US'>this link</a>.<br/>After the plugin has been dowloaded, it needs to be activated from the toolbar.")
+            } else {
+                document.write("To view this page, please download the CORS plugin using <a href ='https://addons.mozilla.org/en-US/firefox/addon/cors-everywhere/'>this link</a>.<br/>After the plugin has been dowloaded, it needs to be activated from the toolbar.")
+            }
+        }        
         req.onload = function(e) {
             console.log(req.responseText);
             var res = JSON.parse(req.responseText);
@@ -293,6 +304,10 @@
 	}
 	
 	function init() {
+        if(navigator.userAgent.indexOf("Chrome") != -1 || navigator.userAgent.indexOf("Firefox") != -1) {
+        } else {
+            document.write('This page supports only Firefox or Chrome.')
+        }
         lastMouseX = null;
         lastMouseY = null;
 		document.getElementById("date").value = "1996-05-19";
