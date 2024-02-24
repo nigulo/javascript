@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+	<style>
+	
+	a, a:hover, a:visited, a:active {
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.button {
+		border: none;
+		color: white;
+		padding: 10px 10px;
+		text-align: center;
+		text-decoration: none;
+		display: inline-block;
+		font-size: 20px;
+		margin: 2px 2px;
+		cursor: pointer;		
+	}
+	
+	.button1 {background-color: #454c8a;}
+	.button2 {background-color: #45008a;}
+	
+	h1 {
+		font-size: 30px;
+		font-weight: 700;
+		color: #98acfb;
+		border-right: 4px solid #000;
+	}
+	h2 {
+		font-size: 25px;
+		font-weight: 300;
+		color: #98acfb;
+		border-right: 4px solid #000;
+	}
+	h3 {
+		font-size: 20px;
+		font-weight: 300;
+		color: #98acfb;
+		border-right: 4px solid #000;
+	}
+	
+	body {
+		background-color: #202010;
+	}
+	
+	#footer {
+		float: right;
+	}
+	</style>
+
+	<title>Sudoku</title>
+	<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+	<script type="text/javascript" src="plot.js"></script>
+	<script type="text/javascript" src="plot_fp.js"></script>
+
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8802095270056417"
+     crossorigin="anonymous"></script>
+	<script type="text/javascript">
+
+	let plot = null;
+	let activeCol = -1;
+	let activeRow = -1;
+	let activeCol2 = -1;
+	let activeRow2 = -1;
+	
+	let grid = [[[0], [0],[0],[0],[0],[0],[0],[0],[0]], 
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]]];
+						
+	let fixedCells = new Set();
+	
+	const SET_BOARD = 0;
+	const PLAY = 1;
+	const FINISHED = 2;
+	let status = SET_BOARD;
+	
+	let hist = [];
+	let selection = 0;
+	let prohibited = {};
+	
+	function getIndex(coord, start, rectSize) {
+		return Math.floor((coord - start)/rectSize);
+	}
+	
+	function draw() {
+		if (plot.isChanged() || plot.isRedraw()) {
+			plot.clearData();
+			if (status == PLAY && isFinished(grid)) {
+				status = FINISHED;
+			}
+
+			const plotArea = plot.getPlotArea();
+			let rectWidth = plotArea.width/3.1;
+			let rectHeight = plotArea.height/3.1;
+			const xPad = plotArea.width - 3*rectWidth;
+			const yPad = plotArea.height - 3*rectHeight;
+			const left = (plotArea.left + plotArea.right)/2 - 1.5*rectWidth;
+			const bottom = (plotArea.bottom + plotArea.top)/2 - 1.5*rectHeight;
+
+			// Plot grid
+			let plotData = new PlotData(PlotType.Rectangles, true);
+			plotData.setWidth(rectWidth);
+			plotData.setHeight(rectHeight);
+			plotData.setLineStyle(new LineStyle("black", 4));
+			for (let i of [0, 1, 2]) {
+				const x = left + i*rectWidth + rectWidth/2;
+				for (let j of [0, 1, 2]) {
+					const y = bottom + j*rectHeight + rectHeight/2;
+					plotData.addDataPoint(new DataPoint(x, y));
+				}
+			}
+			plot.addData(plotData);
+
+			plotData = new PlotData(PlotType.Rectangles, true);
+			rectWidth = rectWidth/3;
+			rectHeight = rectHeight/3;
+			plotData.setWidth(rectWidth);
+			plotData.setHeight(rectHeight);
+			plotData.setLineStyle(new LineStyle("black", 2));
+
+			for (let i of [0, 1, 2, 3, 4, 5, 6, 7, 8]) {
+				const x = left + i*rectWidth + rectWidth/2;
+				for (let j of [0, 1, 2, 3, 4, 5, 6, 7, 8]) {
+					const y = bottom + j*rectHeight + rectHeight/2;
+					plotData.addDataPoint(new DataPoint(x, y));
+				}
+			}
+			plot.addData(plotData);
+			
+			// Plot cell backgrounds
+			if (status != FINISHED && plot.lastMouseX != null && plot.lastMouseY != null) {
+				const activePoint = plot.toPlotCoords(new DataPoint(plot.lastMouseX, plot.lastMouseY));
+				const col = getIndex(activePoint.x, left, rectWidth);
+				const row = getIndex(activePoint.y, bottom, rectHeight);
+				
+				if (row >= 0 && row < 9 && col >= 0 && col < 9) {
+					if (grid[row][col].length == 1) {
+						const number = grid[row][col][0];
+						if (number != 0) {
+							const plotData = new PlotData(PlotType.Rectangles, true);	
+							plotData.setWidth(rectWidth);
+							plotData.setHeight(rectHeight);
+							plotData.setLineStyle(new LineStyle("rgba(255, 0, 0, 0.25)", 2));
+							const x = left + col*rectWidth + rectWidth/2;
+							const y = bottom + row*rectHeight + rectHeight/2;
+							plotData.addDataPoint(new DataPoint(x, y), "rgba(255, 0, 0, 0.25)");
+							plot.addData(plotData);
+							if (selection == 0) {
+								shade(number, left, bottom, rectWidth, rectHeight);
+							}
+						} else {
+							// Cell doesn't contain number
+							const plotData = new PlotData(PlotType.Rectangles, true);	
+							plotData.setWidth(rectWidth);
+							plotData.setHeight(rectHeight);
+							plotData.setLineStyle(new LineStyle("rgba(0, 255, 0, 0.25)", 2));
+							const x = left + col*rectWidth + rectWidth/2;
+							const y = bottom + row*rectHeight + rectHeight/2;
+							plotData.addDataPoint(new DataPoint(x, y), "rgba(0, 255, 0, 0.25)");
+							plot.addData(plotData);
+						}
+					}
+				}
+			}
+			if (selection > 0) {
+				shade(selection, left, bottom, rectWidth, rectHeight);
+			}				
+			
+			// Plot active cell frame
+			if (status != FINISHED && activeRow >= 0 && activeRow < 9 && activeCol >= 0 && activeCol < 9) {
+				let col = -1;
+				let row = -1;
+				if (plot.lastMouseDownX2 != null && plot.lastMouseDownY2 != null) {
+					const activePoint = plot.toPlotCoords(new DataPoint(plot.lastMouseDownX2, plot.lastMouseDownY2));
+					col = getIndex(activePoint.x, left, rectWidth);
+					row = getIndex(activePoint.y, bottom, rectHeight);
+				}
+
+				let col2 = -1;
+				let row2 = -1;
+				if (plot.lastMouseDownX2 != null && plot.lastMouseDownY2 != null) {
+					const activePoint = plot.toPlotCoords(new DataPoint(plot.lastMouseDownX2, plot.lastMouseDownY2));
+					const x = left + activeCol*rectWidth;
+					const y = bottom + activeRow*rectHeight;
+					col2 = getIndex(activePoint.x, x, rectWidth/2);
+					row2 = getIndex(activePoint.y, y, rectHeight/2);
+				}
+				
+				if (activeRow != row || activeCol != col || (activeRow2 != -1 && activeCol2 != -1 && (activeRow2 != row2 || activeCol2 != col2))) {
+					const plotData = new PlotData(PlotType.Rectangles, true);	
+					plotData.setWidth(rectWidth);
+					plotData.setHeight(rectHeight);
+					let color = "green";
+					if (grid[activeRow][activeCol].length == 1 && grid[activeRow][activeCol][0] != 0) {
+						color = "red";
+					}
+					plotData.setLineStyle(new LineStyle(color, 4));
+					const x = left + activeCol*rectWidth + rectWidth/2;
+					const y = bottom + activeRow*rectHeight + rectHeight/2;
+					plotData.addDataPoint(new DataPoint(x, y));
+					plot.addData(plotData);
+					if (activeRow2 >= 0 && activeRow2 < 2 && activeCol2 >= 0 && activeCol2 < 2) {					
+						if (activeRow2 != row2 || activeCol2 != col2) {
+							const plotData = new PlotData(PlotType.Rectangles, true);	
+							plotData.setWidth(rectWidth/2);
+							plotData.setHeight(rectHeight/2);
+							plotData.setLineStyle(new LineStyle("green", 4));
+							const x = left + activeCol*rectWidth + activeCol2*rectWidth/2 + rectWidth/4;
+							const y = bottom + activeRow*rectHeight + activeRow2*rectHeight/2 + rectHeight/4;
+							plotData.addDataPoint(new DataPoint(x, y));
+							plot.addData(plotData);
+						}
+					}
+				} else {
+					activeCol = -1;
+					activeRow = -1;
+					activeCol2 = -1;
+					activeRow2 = -1;
+					plot.lastMouseDownX = null;
+					plot.lastMouseDownX = null;
+					plot.lastMouseDownX2 = null;
+					plot.lastMouseDownX2 = null;
+				}
+			}
+			
+			// If game is finished plot final cell shading
+			if (status == FINISHED) {
+				for (let j = 0; j < 9; j++) {
+					for (let k = 0; k < 9; k++) {
+						const plotData = new PlotData(PlotType.Rectangles, true);	
+						plotData.setWidth(rectWidth);
+						plotData.setHeight(rectHeight);
+						plotData.setLineStyle(new LineStyle("rgba(255, 215, 0, 0.25)", 2));
+						const x = left + k*rectWidth + rectWidth/2;
+						const y = bottom + j*rectHeight + rectHeight/2;
+						plotData.addDataPoint(new DataPoint(x, y), "rgba(255, 215, 0, 0.25)");
+						plot.addData(plotData);
+					}
+				}
+			}
+			
+			// Plot numbers
+			for (i in grid) {
+				const y = bottom + i*rectHeight + rectHeight/2;
+				for (j in grid[i]) {
+					const x = left + j*rectWidth + rectWidth/2;
+					const numbers = grid[i][j];
+					let font = "50px Arial";
+					let color = "black"
+					if (numbers.length == 4) {
+						font = "25px Arial";
+						color = "gray"
+					}
+					for (k in numbers) {
+						const number = numbers[k]
+						if (number > 0 && number < 10) {
+							let dx = 0;
+							let dy = -rectHeight/3;
+							if (numbers.length == 4) {
+								dx = (k % 2 == 0) ? -rectWidth/4 : rectWidth/4;
+								dy = (k < 2) ? -rectWidth/4 : rectWidth/4;
+								dy -= rectHeight/6;
+							}
+							const plotData = new PlotData(PlotType.Text, true);
+							plotData.setText(number.toString());
+							plotData.setFont(font);
+							plotData.addDataPoint(new DataPoint(x + dx, y + dy), color);
+							plot.addData(plotData);
+						}
+					}
+				}
+			}
+			
+			plot.plot();
+
+		}
+	}
+	
+	function shade(number, left, bottom, rectWidth, rectHeight) {
+		let shaded = {};
+		for (let j = 0; j < 9; j++) {
+			for (let k = 0; k < 9; k++) {
+				
+				if (!shaded[[j, k]]) {
+					const p = prohibited[[j, k]];
+					if (p != null && p.has(number)) {
+						var plotData = new PlotData(PlotType.Lines, true);	
+						plotData.setLineStyle(new LineStyle("rgba(255, 0, 0, 1)", 4));
+						var x = left + k*rectWidth + rectWidth/3;
+						var y = bottom + j*rectHeight + rectHeight/3;
+						plotData.addDataPoint(new DataPoint(x, y));
+						plotData.addDataPoint(new DataPoint(x + rectWidth/3, y + rectWidth/3));
+						plot.addData(plotData);
+
+						plotData = new PlotData(PlotType.Lines, true);	
+						plotData.setLineStyle(new LineStyle("rgba(255, 0, 0, 1)", 4));
+						x = left + k*rectWidth + rectWidth/3;
+						y = bottom + j*rectHeight + 2*rectHeight/3;
+						plotData.addDataPoint(new DataPoint(x, y));
+						plotData.addDataPoint(new DataPoint(x + rectWidth/3, y - rectWidth/3));
+						plot.addData(plotData);
+					}
+					if (grid[j][k].length == 1 && grid[j][k][0] != 0) {
+						const plotData = new PlotData(PlotType.Rectangles, true);	
+						plotData.setWidth(rectWidth);
+						plotData.setHeight(rectHeight);
+						plotData.setLineStyle(new LineStyle("rgba(255, 0, 0, 0.25)", 2));
+						const x = left + k*rectWidth + rectWidth/2;
+						const y = bottom + j*rectHeight + rectHeight/2;
+						plotData.addDataPoint(new DataPoint(x, y), "rgba(255, 0, 0, 0.25)");
+						plot.addData(plotData);
+						shaded[[j, k]] = true;
+					}
+				}
+				
+				if (grid[j][k].length == 1 && number == grid[j][k][0]) {
+					const startRow = j - j % 3;
+					const startCol = k - k % 3;
+					for (let j1 = startRow; j1 < startRow + 3; j1++) {
+						for (let k1 = startCol; k1 < startCol + 3; k1++) {
+							if (shaded[[j1, k1]]) {
+								continue;
+							}
+							const plotData = new PlotData(PlotType.Rectangles, true);	
+							plotData.setWidth(rectWidth);
+							plotData.setHeight(rectHeight);
+							plotData.setLineStyle(new LineStyle("rgba(255, 0, 0, 0.25)", 2));
+							const x = left + k1*rectWidth + rectWidth/2;
+							const y = bottom + j1*rectHeight + rectHeight/2;
+							plotData.addDataPoint(new DataPoint(x, y), "rgba(255, 0, 0, 0.25)");
+							plot.addData(plotData);
+							shaded[[j1, k1]] = true;
+						}
+					}
+				
+					for (let j1 = 0; j1 < 9; j1++) {
+						if (shaded[[j1, k]]) {
+							continue;
+						}
+						const plotData = new PlotData(PlotType.Rectangles, true);	
+						plotData.setWidth(rectWidth);
+						plotData.setHeight(rectHeight);
+						plotData.setLineStyle(new LineStyle("rgba(255, 0, 0, 0.25)", 2));
+						const x = left + k*rectWidth + rectWidth/2;
+						const y = bottom + j1*rectHeight + rectHeight/2;
+						plotData.addDataPoint(new DataPoint(x, y), "rgba(255, 0, 0, 0.25)");
+						plot.addData(plotData);
+						shaded[[j1, k]] = true;
+					}
+
+					for (let k1 = 0; k1 < 9; k1++) {
+						if (shaded[[j, k1]]) {
+							continue;
+						}
+						const plotData = new PlotData(PlotType.Rectangles, true);	
+						plotData.setWidth(rectWidth);
+						plotData.setHeight(rectHeight);
+						plotData.setLineStyle(new LineStyle("rgba(255, 0, 0, 0.25)", 2));
+						const x = left + k1*rectWidth + rectWidth/2;
+						const y = bottom + j*rectHeight + rectHeight/2;
+						plotData.addDataPoint(new DataPoint(x, y), "rgba(255, 0, 0, 0.25)");
+						plot.addData(plotData);
+						shaded[[j, k1]] = true;
+					}									
+				}
+			}
+		}
+	}
+			
+	window.requestAnimFrame = (function() {
+	  return window.requestAnimationFrame ||
+			 window.webkitRequestAnimationFrame ||
+			 window.mozRequestAnimationFrame ||
+			 window.oRequestAnimationFrame ||
+			 window.msRequestAnimationFrame ||
+			 function(/* function FrameRequestCallback */ callback, /* DOMElement Element */ element) {
+			   window.setTimeout(callback, 100);
+			 };
+	})();
+
+    function tick() {
+        requestAnimFrame(tick);
+		
+		draw();
+    }
+	
+	function check(number, main, i, j, k) {
+		if (main) {
+			if (grid[j][k].length == 1 && number == grid[j][k][0]) {
+				return true;
+			}
+		} else {
+			if (grid[j][k].length == 1 && number == grid[j][k][0] || number == grid[j][k][i]) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	function init() {
+		const canvas = document.getElementById("canvas");
+		plot = new Plot(canvas, new PlotArea(-1, -1, 1, 1));
+		plot.setBackground('white');
+		
+		for (var i = 1; i <= 9; i++) {
+			document.getElementById("select"+i).checked = false;
+		}
+		
+        canvas.onmousedown = function (e) {
+			plot.handleMouseDown(e);
+			const plotArea = plot.getPlotArea();
+			const rectWidth = plotArea.width/9.3;
+			const rectHeight = plotArea.height/9.3;
+			const left = (plotArea.left + plotArea.right)/2 - 4.5*rectWidth;
+			const bottom = (plotArea.bottom + plotArea.top)/2 - 4.5*rectHeight;
+			const activePoint = plot.toPlotCoords(new DataPoint(plot.lastMouseDownX, plot.lastMouseDownY));
+			const newActiveCol = Math.floor((activePoint.x - left)/rectWidth);
+			const newActiveRow = Math.floor((activePoint.y - bottom)/rectHeight);
+			if (!has(fixedCells, newActiveRow, newActiveCol)) {
+				activeRow = newActiveRow;
+				activeCol = newActiveCol;
+			}
+			if (status != PLAY) {
+				return;
+			}
+			if (e.shiftKey || e.ctrlKey || (activeRow2 >= 0 && activeRow2 < 2 && activeCol2 >= 0 && activeCol2 < 2)) {
+				if (grid[activeRow][activeCol].length == 4 || grid[activeRow][activeCol][0] == 0) {
+					const x = left + activeCol*rectWidth;
+					const y = bottom + activeRow*rectHeight;
+					activeCol2 = Math.floor((activePoint.x - x)/rectWidth*2);
+					activeRow2 = Math.floor((activePoint.y - y)/rectHeight*2);
+				} else {
+					activeCol2 = -1;
+					activeRow2 = -1;
+				}
+			}
+		};
+        document.onmouseup = function (e) {plot.handleMouseUp(e)};
+        document.onmousemove = function (e) {plot.handleMouseMove(e)};
+        document.onkeydown = function (e) {
+			plot.handleKeyDown(e);
+			if (status == FINISHED) {
+				return;
+			}
+			const key = e.key;
+			if (key == "Backspace") {
+				undo();
+				return;
+			}
+			let num = -1;
+			if (key == " ") {
+				num = 0;
+			} else if (key == "0" || key == "1" || key == "2" || key == "3" || key == "4" || key == "5" || key == "6" || key == "7" || key == "8" || key == "9") {
+				num = parseInt(key);
+			}
+			insert(num);
+			if (key == "x" || key == "X") {
+				prohibit();
+			}
+		};
+		window.addEventListener('keydown', function(e) {
+			if (e.keyCode == 32 && e.target == document.body) {
+				e.preventDefault();
+			}});
+		tick();
+	}
+		
+	function saveHistory() {
+		if (status != PLAY) {
+			return;
+		}
+		let gridCopy = cloneGrid(grid);
+		let prohibitedCopy = cloneProhibited(prohibited);
+		if (hist.length > 0 && 
+				equalGrid(hist[hist.length - 1][4], gridCopy) &&
+				equalProhibited(hist[hist.length - 1][5], prohibitedCopy)
+				) {
+			return;
+		}
+		if (hist.length >= 1000) {
+			hist.splice(1, 1);
+		}
+		hist.push([activeRow, activeCol, activeRow2, activeCol2, gridCopy, prohibitedCopy]);
+	}
+	
+	function undo() {
+		if (status != PLAY || hist.length <= 1) {
+			return;
+		}
+		hist.pop();
+		let state = hist[hist.length - 1];
+		activeRow = state[0];
+		activeCol = state[1];
+		activeRow2 = state[2];
+		activeCol2 = state[3];
+		grid = cloneGrid(state[4]);
+		prohibited = cloneProhibited(state[5]);
+	}
+	
+	function cloneGrid(grid) {
+		let newGrid = [];
+		for (let i = 0; i < grid.length; i++) {
+			let newGrid2 = [];
+			for (let j = 0; j < grid[i].length; j++) {
+				let newGrid3 = [];
+				for (let k = 0; k < grid[i][j].length; k++) {
+					newGrid3.push(grid[i][j][k]);
+				}
+				newGrid2.push(newGrid3);
+			}
+			newGrid.push(newGrid2);
+		}
+		return newGrid;
+	}
+	
+	function cloneProhibited(prohibited) {
+		let newProhibited = {};
+		for (const k of Object.keys(prohibited)) {
+			nums = new Set();
+			for (const num of prohibited[k].keys()) {
+				nums.add(num);
+			}
+			newProhibited[k] = nums;
+		}
+		return newProhibited;
+	}
+	
+	function add(set, row, col) {
+		set.add(row*9+col)
+	}
+	
+	function has(set, row, col) {
+		return set.has(row*9+col)
+	}
+		
+	function equalGrid(grid1, grid2) {
+		for (let i = 0; i < grid1.length; i++) {
+			for (let j = 0; j < grid1[i].length; j++) {
+				if (grid1[i][j].length != grid2[i][j].length) {
+					return false;
+				}
+				for (let k = 0; k < grid1[i][j].length; k++) {
+					if (grid1[i][j][k] != grid2[i][j][k]) {
+						return false;
+					}
+				}
+			}
+		}
+		return true;
+	}
+
+	function equalProhibited(p1, p2) {
+		if (!equalProhibited2(p1, p2)) {
+			return false;
+		}
+		return equalProhibited2(p2, p1);
+	}
+	
+	function equalProhibited2(p1, p2) {
+		for (const k of Object.keys(p1)) {
+			if (!Object.hasOwn(p2, k)) {
+				return false;
+			}
+			for (const num of p1[k].keys()) {
+				if (!p2[k].has(num)) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+	
+	function isFinished(grid) {
+		for (let i = 0; i < grid.length; i++) {
+			for (let j = 0; j < grid[i].length; j++) {
+				if (grid[i][j].length != 1 || grid[i][j][0] == 0) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+		
+	function clearGrid() {
+		grid = [[[0], [0],[0],[0],[0],[0],[0],[0],[0]], 
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]],
+			[[0], [0],[0],[0],[0],[0],[0],[0],[0]]];
+	}
+	
+	function randomSolution() {
+		let numFilledCells = 0;
+		while (numFilledCells < 81) {
+			clearGrid();
+			numFilledCells = 0;
+			for (let num = 1; num < 10; num++) {
+				const allOptions = allowedSectors(num);
+				let nfc = 0;
+				for (let allOptionsIndex in allOptions) {
+					const sectorOptions = allOptions[allOptionsIndex];
+					for (let sectorOptionsIndex in sectorOptions) {
+						const rowSector = sectorOptions[sectorOptionsIndex][0];
+						const colSector = sectorOptions[sectorOptionsIndex][1];
+						const options = sectorOptions[sectorOptionsIndex][2];
+						let optionIndex = Math.floor(Math.random() * options.length);
+						for (let i = optionIndex + 1;; i++) {
+							if (i == options.length) {
+								i = 0;
+							}
+							const row = rowSector*3 + options[i][0];
+							const col = colSector*3 + options[i][1];
+							if (allowed(grid, row, col, num)) {
+								grid[row][col][0] = num;
+								numFilledCells++;
+								nfc++;
+								break;
+							}
+							if (i == optionIndex) {
+								break;
+							}
+						}
+					}
+					if (nfc >= 9) {
+						break;
+					}
+				}
+				if (numFilledCells < num * 9) {
+					break;
+				}
+			}
+		}
+	}
+	
+	function allowedSectors(num) {
+		const allOptions = [[], [], [], [], [], [], [], [], []];
+		for (let rowSector = 0; rowSector < 3; rowSector++) {
+			for (let colSector = 0; colSector < 3; colSector++) {
+				const options = optionsInSector(rowSector, colSector, num);
+				if (options.length > 0) {
+					allOptions[options.length - 1].push([rowSector, colSector, options])
+				}
+			}
+		}
+		return allOptions;
+	}
+		
+	function optionsInSector(rowSector, colSector, num) {
+		const options = [];
+		const rowStart = rowSector * 3;
+		const colStart = colSector * 3
+		const rowEnd = rowStart + 3;
+		const colEnd = colStart + 3;
+		for (let i = rowStart; i < rowEnd; i++) {
+			for (let j = colStart; j < colEnd; j++) {
+				if (allowed(grid, i, j, num)) {
+					options.push([i - rowStart, j - colStart]);
+				}
+			}
+		}
+		return options;
+	}
+			
+	function allowed(grid, row, col, num) {
+		if (grid[row][col][0] != 0) {
+			return false;
+		}
+		for (let i = 0; i < 9; i++) {
+			if (grid[i][col][0] == num) {
+				return false;
+			}
+		}
+
+		for (let i = 0; i < 9; i++) {
+			if (grid[row][i][0] == num) {
+				return false;
+			}
+		}
+
+		const startRow = row - row % 3;
+		const startCol = col - col % 3;
+		const endRow = startRow + 3;
+		const endCol = startCol + 3;
+		for (let i = startRow; i < endRow; i++) {
+			for (let j = startCol; j < endCol; j++) {
+				if (grid[i][j][0] == num) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	function allowedAt(emptyCells, num) {
+		for (let i in emptyCells) {
+			const row = emptyCells[i][0];
+			const col = emptyCells[i][1];
+			if (allowed(grid, row, col, num)) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	function generate() {
+		let minNumEmptyCells = 0;
+		let bestGrid = grid;
+		for (i = 0; i < 1; i++) {
+			randomSolution();
+			const gridCopy = cloneGrid(grid);
+			for (j = 0; j < 1000; j++) {
+				grid = cloneGrid(gridCopy);
+				let numEmptyCells = 0;
+				let lastNum = 0;
+				let newNum = Math.floor(Math.random() * 9) + 1;
+				let emptyCells = []
+				let triedCells = new Set();
+				let check = true;//false;
+				while (triedCells.size + numEmptyCells < 81) {
+					lastNum = 0;
+					if (!check) {
+						lastNum = newNum;
+					}
+					const emptyCell = tryEmptyCell(lastNum, emptyCells, check, triedCells);
+					newNum = emptyCell[0];
+					if (newNum > 0) {
+						emptyCells.push([emptyCell[1], emptyCell[2]])
+						numEmptyCells++;
+						//if (!check && numEmptyCells > 6) {
+						//	check = true;
+						//}
+					}
+				}
+				if (numEmptyCells > minNumEmptyCells) {
+					minNumEmptyCells = numEmptyCells;
+					bestGrid = cloneGrid(grid);
+					if (minNumEmptyCells > 55) {
+						grid = bestGrid;
+						return;
+					}
+				}
+			}
+		}
+		grid = bestGrid;
+	}
+	
+	function tryEmptyCell(lastNum, emptyCells, check, triedCells) {
+		let cellIndex = Math.floor(Math.random() * 81);
+		for (let i = cellIndex + 1;; i++) {
+			if (i == 81) {
+				i = 0;
+			}
+			const row = Math.floor(i / 9)
+			const col = i % 9;
+			if (!has(triedCells, row, col)) {
+				if (grid[row][col][0] > 0) {
+					let num = grid[row][col][0];
+					if (lastNum == 0 || lastNum == num) {
+						if (num > 0) {
+							grid[row][col][0] = 0;
+							let unique = true;					
+							for (let newNum = 1; newNum < 10; newNum++) {
+								if (newNum != num) {
+									if (check && allowed(grid, row, col, newNum)) {// && allowedAt(emptyCells, num)) {
+										unique = false;
+										break;
+									}
+								}
+							}
+							if (unique) {
+								return [num, row, col];
+							}
+							add(triedCells, row, col)
+							grid[row][col][0] = num;
+						}
+					}
+				}
+			}
+			if (i == cellIndex) {
+				break;
+			}
+		}
+		return [0, 0, 0];
+	}
+
+	function sleep(ms) {
+		return new Promise(resolve => setTimeout(resolve, ms));
+	}
+	
+	function start() {
+		status = PLAY;
+		fixedCells = new Set();
+		prohibited = {};
+		document.getElementById("customGameButton").innerHTML = "Clear board";
+		for (let i = 0; i < grid.length; i++) {
+			for (let j = 0; j < grid[i].length; j++) {
+				if (grid[i][j][0] != 0) {
+					add(fixedCells, i, j);
+				}
+			}
+		}
+		initialGrid = cloneGrid(grid);
+		hist = [];
+		saveHistory();
+	}
+	
+	function customGame() {
+		if (status == SET_BOARD) {
+			start();
+		} else {
+			status = SET_BOARD;
+			document.getElementById("customGameButton").innerHTML = "Set board";
+			clearGrid();
+			fixedCells = new Set();
+		}
+	}
+	
+	function reset() {
+		status = PLAY;
+		grid = cloneGrid(initialGrid);
+		prohibited = {};
+		hist = [];
+		saveHistory();
+	}
+	
+	function randomGame() {
+		generate();
+		start();
+	}
+	
+	function insert(num) {
+		if (num >= 0 && num < 10) {
+			if (activeRow >= 0 && activeRow < 9 && activeCol >= 0 && activeCol < 9) {
+				let i = 0
+				let main = true;
+				if (activeRow2 >= 0 && activeRow2 < 2 && activeCol2 >= 0 && activeCol2 < 2) {
+					i = 2*activeRow2 + activeCol2;
+					if (grid[activeRow][activeCol].length == 1) {
+						if (grid[activeRow][activeCol][0] == 0) {
+							grid[activeRow][activeCol] = [0, 0, 0, 0];
+						} else {
+							i = -1
+						}
+					}
+					main = false;
+				} else {
+					if (grid[activeRow][activeCol].length == 4) {
+						grid[activeRow][activeCol] = [0];
+					}
+				}
+				if (i >= 0) {
+					if (num == 0) {
+						grid[activeRow][activeCol][i] = 0;
+					} else {
+						const startRow = activeRow - activeRow % 3;
+						const startCol = activeCol - activeCol % 3;
+						let found = false;
+						for (let j = startRow; j < startRow + 3; j++) {
+							for (let k = startCol; k < startCol + 3; k++) {
+								found = check(num, main, i, j, k);
+								if (found) {
+									break;
+								}
+							}
+							if (found) {
+								break;
+							}
+						}
+						if (!found) {
+							for (let j = 0; j < 9; j++) {
+								found = check(num, main, i, j, activeCol);
+								if (found) {
+									break;
+								}
+							}
+						}
+						if (!found) {
+							for (let k = 0; k < 9; k++) {
+								found = check(num, main, i, activeRow, k);
+								if (found) {
+									break;
+								}
+							}
+						}
+						if (!found) {
+							grid[activeRow][activeCol][i] = num;
+						}
+					}
+				}
+				if (main) {
+					let p = prohibited[[activeRow, activeCol]];
+					if (p != null) {
+						p.delete(selection);
+					}
+				}
+				saveHistory();
+			}
+		}
+	}
+	
+	function doSelect(num) {
+		if (status != PLAY || selection == num) {
+			selection = 0;
+			document.getElementById("select"+num).checked = false;
+			return;
+		}
+		selection = num;
+	}
+
+	function prohibit() {
+		if (status != PLAY || selection == 0) {
+			return;
+		}
+		if (activeRow >= 0 && activeRow < 9 && activeCol >= 0 && activeCol < 9) {
+			if (grid[activeRow][activeCol].length == 1 && 
+					grid[activeRow][activeCol][0] != 0) {
+				return;
+			}
+			let p = prohibited[[activeRow, activeCol]];
+			if (p == null) {
+				p = new Set();
+				prohibited[[activeRow, activeCol]] = p;
+			}
+			if (p.has(selection)) {
+				p.delete(selection);
+			} else {
+				p.add(selection);
+			}
+			saveHistory();
+		}
+	}
+	
+	</script>
+
+
+</head>
+
+
+<body onload="init();">
+    <header>
+    </header>
+	<center>
+	<table>
+	<tr>
+	<td>
+		<canvas id="canvas" style="border: none;" width="500" height="500"></canvas>
+	</td><td>
+		<label class="button button1">1<input id="select1" name="selection" type="radio" onclick="doSelect(1)"><span class="checkmark"></span></label></br>
+		<label class="button button1">2<input id="select2" name="selection" type="radio" onclick="doSelect(2)"><span class="checkmark"></span></label></br>
+		<label class="button button1">3<input id="select3" name="selection" type="radio" onclick="doSelect(3)"><span class="checkmark"></span></label></br>
+		<label class="button button1">4<input id="select4" name="selection" type="radio" onclick="doSelect(4)"><span class="checkmark"></span></label></br>
+		<label class="button button1">5<input id="select5" name="selection" type="radio" onclick="doSelect(5)"><span class="checkmark"></span></label></br>
+		<label class="button button1">6<input id="select6" name="selection" type="radio" onclick="doSelect(6)"><span class="checkmark"></span></label></br>
+		<label class="button button1">7<input id="select7" name="selection" type="radio" onclick="doSelect(7)"><span class="checkmark"></span></label></br>
+		<label class="button button1">8<input id="select8" name="selection" type="radio" onclick="doSelect(8)"><span class="checkmark"></span></label></br>
+		<label class="button button1">9<input id="select9" name="selection" type="radio" onclick="doSelect(9)"><span class="checkmark"></span></label>
+	</td></tr>
+	</table>
+	<button id="oneButton" class="button button1" onclick="insert(1)">1</button>
+	<button id="twoButton" class="button button1" onclick="insert(2)">2</button>
+	<button id="threeButton" class="button button1" onclick="insert(3)">3</button>
+	<button id="fourButton" class="button button1" onclick="insert(4)">4</button>
+	<button id="fiveButton" class="button button1" onclick="insert(5)">5</button>
+	<button id="sixButton" class="button button1" onclick="insert(6)">6</button>
+	<button id="sevenButton" class="button button1" onclick="insert(7)">7</button>
+	<button id="eightButton" class="button button1" onclick="insert(8)">8</button>
+	<button id="nineButton" class="button button1" onclick="insert(9)">9</button>
+	<button id="clearButton" class="button button1" onclick="insert(0)">Clear</button>
+	<button id="prohibitButton" class="button button1" onclick="prohibit()">x</button>
+	</br>
+	<button id="randomGameButton" class="button button1" onclick="randomGame()">Random game</button>
+	<button id="customGameButton" class="button button1" onclick="customGame()">Set board</button>
+	<button id="resetButton" class="button button1" onclick="reset()">Reset</button>
+	<button id="undoButton" class="button button1" onclick="undo()">Undo</button>
+
+	<h2>How to play:</br>
+		Click on a cell and use number keys to enter numbers.</br>
+		Press 0 or space to clear a cell.</br>
+		To undo press backspace.</br>
+		To add notes hold shift or ctrl while clicking on a cell.
+	</h2>
+	<button id="tricks" class="button button1" onclick="window.location='tricks.html'">Tricks for solving</button>
+	</center>
+</body>
+
+</html>

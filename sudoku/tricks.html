@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+
+	<style>
+	
+	a, a:hover, a:visited, a:active {
+		color: inherit;
+		text-decoration: none;
+	}
+	
+	.button {
+		border: none;
+		color: white;
+		padding: 10px 10px;
+		text-align: center;
+		text-decoration: none;
+		display: inline-block;
+		font-size: 20px;
+		margin: 2px 2px;
+		cursor: pointer;		
+	}
+	
+	.link {
+		a, a:hover, a:visited, a:active {
+			color: inherit;
+			text-decoration: none;
+		}
+	}
+
+	.button1 {background-color: #454c8a;}
+	
+	h1 {
+		font-size: 30px;
+		font-weight: 700;
+		color: #98acfb;
+		border-right: 4px solid #000;
+	}
+	h2 {
+		font-size: 25px;
+		font-weight: 300;
+		color: #98acfb;
+		border-right: 4px solid #000;
+	}
+	h3 {
+		font-size: 20px;
+		font-weight: 300;
+		color: #98acfb;
+		border-right: 4px solid #000;
+	}
+	
+	body {
+		background-color: #202010;
+	}
+	
+	#footer {
+		position: fixed;
+		padding: 10px 10px 0px 10px;
+		bottom: 0;
+		width: 100%;
+        height: fit-content;
+
+	}
+	.contact { 
+		float: right;
+		padding: 10px 50px;
+	}
+	</style>
+
+	<title>Sudoku tricks</title>
+	<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8802095270056417"
+     crossorigin="anonymous"></script>
+
+	<script type="text/javascript">
+		function navigate(page) {
+			if (page == 1) {
+				document.body.innerHTML = 
+					"<center>"
+					+ "<h2>Let's look at the following Sudoku.</h2>" 
+					+ "<img src=\"tricks/1.jpg\" width=502 height=502/><br/>"
+					+ "<button class=\"button button1\" onclick=\"navigate(0)\">Back to game</button>"
+					+ "<button class=\"button button1\" onclick=\"navigate(2)\">Next</button>"
+					+ "</center>";
+			} else if (page == 2) {
+				document.body.innerHTML = 
+					"<center>"
+					+ "<h2>Simplest way to start is to look for single allowed cells in a column, row or a block.</h2>" 
+					+ "<img src=\"tricks/2.jpg\" width=502 height=502/><br/>"
+					+ "<button class=\"button button1\" onclick=\"navigate(1)\">Previous</button>"
+					+ "<button class=\"button button1\" onclick=\"navigate(3)\">Next</button>"
+					+ "</center>";
+			} else if (page == 3) {
+				document.body.innerHTML = 
+					"<center>"
+					+ "<h2>Next we can look at the blocks that only contain allowed cells in the same row/colum and</br>eliminating the cells in the same row/column from the other block(s).</h2>" 
+					+ "<img src=\"tricks/3.jpg\" width=502 height=502/><br/>"
+					+ "<button class=\"button button1\" onclick=\"navigate(2)\">Previous</button>"
+					+ "<button class=\"button button1\" onclick=\"navigate(4)\">Next</button>"
+					+ "</center>";
+			} else if (page == 4) {
+				document.body.innerHTML = 
+					"<center>"
+					+ "<h2>As an extension to the previous trick, we can eliminate cells simultaneously in a row and column.</h2>" 
+					+ "<img src=\"tricks/4.jpg\" width=502 height=502/><br/>"
+					+ "<button class=\"button button1\" onclick=\"navigate(3)\">Previous</button>"
+					+ "<button class=\"button button1\" onclick=\"navigate('5a')\">Next</button>"
+					+ "</center>";
+			} else if (page == "5a") {
+				document.body.innerHTML = 
+					"<center>"
+					+ "<h2>When things get more complicated, let's start by writing down notes into cells allowed for the given number.</br></h2>" 
+					+ "<img src=\"tricks/5a.jpg\" width=502 height=502/><br/>"
+					+ "<button class=\"button button1\" onclick=\"navigate(4)\">Previous</button>"
+					+ "<button class=\"button button1\" onclick=\"navigate('5b')\">Next</button>"
+					+ "</center>";
+			} else if (page == "5b") {
+				document.body.innerHTML = 
+					"<center>"
+					+ "<h2>Let's try to find another number with the same allowed cells in that block and add more notes.</br>Now these two cells are forbidden for any other number.</h2>" 
+					+ "<img src=\"tricks/5b.jpg\" width=502 height=502/><br/>"
+					+ "<button class=\"button button1\" onclick=\"navigate('5a')\">Previous</button>"
+					+ "<button class=\"button button1\" onclick=\"navigate('5c')\">Next</button>"
+					+ "</center>";
+			} else if (page == "5c") {
+				document.body.innerHTML = 
+					"<center>"
+					+ "<h2>Finally, if we are lucky to spot a third number with three options in that same block including these two cells,</br>we have isolated the only allowed cell for this number. </h2>" 
+					+ "<img src=\"tricks/5c.jpg\" width=502 height=502/><br/>"
+					+ "<button class=\"button button1\" onclick=\"navigate('5b')\">Previous</button>"
+					+ "<button class=\"button button1\" onclick=\"navigate(0)\">Back to game</button>"
+					+ "</center>";
+			} else {
+				window.location="index.html";
+			}
+		}
+	</script>
+
+</head>
+
+
+<body onload="navigate(1)">
+</body>
+
+</html>
