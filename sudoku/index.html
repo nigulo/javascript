@@ -98,7 +98,7 @@
 		if (plot.isChanged() || plot.isRedraw()) {
 			plot.clearData();
 			if (status == PLAY && isFinished(grid)) {
-				status = FINISHED;
+				finish();
 			}
 
 			const plotArea = plot.getPlotArea();
@@ -820,6 +820,13 @@
 		saveHistory();
 	}
 	
+	function finish() {
+		status = FINISHED;
+		doSelect(selection)
+		fixedCells = new Set();
+		prohibited = {};
+	}
+	
 	function customGame() {
 		if (status == SET_BOARD) {
 			start();
@@ -832,6 +839,9 @@
 	}
 	
 	function reset() {
+		if (status == SET_BOARD) {
+			return;
+		}
 		status = PLAY;
 		grid = cloneGrid(initialGrid);
 		prohibited = {};
@@ -845,6 +855,9 @@
 	}
 	
 	function insert(num) {
+		if (status == FINISHED) {
+			return;
+		}
 		if (num >= 0 && num < 10) {
 			if (activeRow >= 0 && activeRow < 9 && activeCol >= 0 && activeCol < 9) {
 				let i = 0
