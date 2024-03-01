@@ -850,6 +850,9 @@
 	}
 	
 	function randomGame() {
+		if (status != SET_BOARD) {
+			return;
+		}
 		generate();
 		start();
 	}
@@ -959,6 +962,32 @@
 		}
 	}
 	
+	async function paste() {
+		if (status != SET_BOARD) {
+			return;
+		}
+		try {
+			navigator.clipboard.readText().then(
+				clipText => {
+					const nums = clipText.trim().split(new RegExp("\\s+"));
+					if (nums.length == 81) {
+						for (var i = 0; i < 9; i++) {
+							for (var j = 0; j < 9; j++) {
+								const num = parseInt(nums[i*9 + j]);
+								if (num > 0 && num < 10) {
+									grid[9-i-1][j] = [num];
+								} else {
+									grid[9-i-1][j] = [0];
+								}
+							}
+						}
+						start();
+					}});
+		} catch (ex) {
+			alert("Paste board failed.");
+		}
+	}
+	
 	</script>
 
 
@@ -998,6 +1027,7 @@
 	<button id="prohibitButton" class="button button1" onclick="prohibit()">x</button>
 	</br>
 	<button id="randomGameButton" class="button button1" onclick="randomGame()">Random game</button>
+	<button id="pasteButton" class="button button1" onclick="paste()">Paste board</button>
 	<button id="customGameButton" class="button button1" onclick="customGame()">Set board</button>
 	<button id="resetButton" class="button button1" onclick="reset()">Reset</button>
 	<button id="undoButton" class="button button1" onclick="undo()">Undo</button>
