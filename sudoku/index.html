@@ -835,6 +835,8 @@
 			document.getElementById("customGameButton").innerHTML = "Set board";
 			clearGrid();
 			fixedCells = new Set();
+			prohibited = {};
+			doSelect(selection);
 		}
 	}
 	
