@@ -184,36 +184,9 @@ const generateAlmanac = async () => {
   }
 }
 
-const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
-
-const clip = (n) => {
-    return (n % 24 + 24) % 24
-}
-
-function shiftTime(timeStr, hours) {
-    const [h, m, s] = timeStr.split(':').map(Number);
-    const totalSeconds = (h * 3600 + m * 60 + s) + hours * 3600;
-    const normalized = ((totalSeconds % 86400) + 86400) % 86400; // Keep in 0–86399
-    const hh = Math.floor(normalized / 3600);
-    const mm = Math.floor((normalized % 3600) / 60);
-    const ss = Math.floor(normalized % 60);
-    return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`;
-}
-
-const getTimeZone = () => {
-    return parseFloat(timezone.value) || 0
-}
-
-const formatDay = (day) => {
-    const date = new Date(year.value, 0, day);
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
 // Create the hourglass plot
 const createPlot = (data) => {
   if (!plotContainer.value) return
-
-  const filteredData = data.filter(d => !d.error)
 
   // For each day, use current day's sunset and next day's sunrise
   // This represents the night between days
@@ -224,9 +197,10 @@ const createPlot = (data) => {
   // Print full data for debugging
   /*console.log('=== Sunrise/Sunset Data ===')
   console.log('Day | Date | Sunset UTC | Sunrise (next day) UTC | Sunset Local | Sunrise Local')
-  filteredData.slice(150, 170).forEach((d, idx) => {
+  data.slice(150, 170).forEach((d, idx) => {
+    if (d.error) return
     const i = idx + 150
-    const nextDay = filteredData[i + 1]
+    const nextDay = data[i + 1]
     if (nextDay) {
       const sunsetUTC = timeToHours(d.sunset)
       const sunriseUTC = timeToHours(nextDay.sunrise)
@@ -238,16 +212,21 @@ const createPlot = (data) => {
 
   const offset = Math.round(12 + longitude.value * 24/360)
 
-  filteredData.forEach((d, i) => {
-    const nextDayData = filteredData[i + 1]
+  data.forEach((d, i) => {
+    const nextDayData = data[i + 1]
     if (!nextDayData) return
 
     // Always pair day i's sunset with day i+1's sunrise
-    const sunsetUTC = timeToHours(d.sunset)
-    const sunriseUTC = timeToHours(nextDayData.sunrise)
-
-    sunsetXValues.push(clip(sunsetUTC + offset))
-    sunriseXValues.push(clip(sunriseUTC + offset))
+    let sunset = d.error ? null : clip(timeToHours(d.sunset) + offset)
+    let sunrise = nextDayData.error ? null : clip(timeToHours(nextDayData.sunrise) + offset)
+    sunrise = !sunset ? null : sunrise
+    sunset = !sunrise ? null : sunset
+    if (sunset > sunrise) {
+        sunset = null
+        sunrise = null
+    }
+    sunsetXValues.push(sunset)
+    sunriseXValues.push(sunrise)
     yValues.push(i + 1)
   })
 
@@ -267,7 +246,7 @@ const createPlot = (data) => {
     showlegend: false,
     hovertemplate: '%{customdata}<br>Sunset: %{text}<extra></extra>',
     customdata: yValues.map(day => formatDay(day)),
-    text: filteredData.slice(0, -1).map(d => shiftTime(d.sunset, getTimeZone()))
+    text: data.slice(0, -1).map(d => d.error ? "" : shiftTime(d.sunset, getTimeZone()))
   }
 
   const sunriseTrace = {
@@ -282,13 +261,35 @@ const createPlot = (data) => {
     showlegend: false,
     hovertemplate: '%{customdata}<br>Sunrise: %{text}<extra></extra>',
     customdata: yValues.map(day => formatDay(day)),
-    text: filteredData.slice(1).map(d => shiftTime(d.sunrise, getTimeZone()))
+    text: data.slice(1).map(d => d.error ? "" : shiftTime(d.sunrise, getTimeZone()))
   }
 
+  let polarNight = true
+  let polarDay = false
+  let polarDayEnd = false
   // Create night duration bars (horizontal lines between curves)
   const nightBars = []
   sunsetXValues.forEach((sunsetX, i) => {
-    const sunriseX = sunriseXValues[i]
+    let sunriseX = sunriseXValues[i]
+    if (!sunsetX || !sunriseX) {
+        if (polarNight) {
+            sunsetX = plotLeft
+            sunriseX = plotRight
+        } else if (polarDayEnd) {
+            polarNight = true
+            polarDayEnd = false
+            sunsetX = plotLeft
+            sunriseX = plotRight
+        } else {
+            polarDay = true
+        }
+    } else {
+        polarNight = false
+        if (polarDay) {
+            polarDay = false
+            polarDayEnd = true
+        }
+    }
     nightBars.push({
       x: [sunsetX, sunriseX],
       y: [yValues[i], yValues[i]],
@@ -392,6 +393,31 @@ const createPlot = (data) => {
   }
 
   Plotly.newPlot(plotContainer.value, traces, layout, config)
+}
+
+const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+
+const clip = (n) => {
+    return (n % 24 + 24) % 24
+}
+
+function shiftTime(timeStr, hours) {
+    const [h, m, s] = timeStr.split(':').map(Number);
+    const totalSeconds = (h * 3600 + m * 60 + s) + hours * 3600;
+    const normalized = ((totalSeconds % 86400) + 86400) % 86400; // Keep in 0–86399
+    const hh = Math.floor(normalized / 3600);
+    const mm = Math.floor((normalized % 3600) / 60);
+    const ss = Math.floor(normalized % 60);
+    return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`;
+}
+
+const getTimeZone = () => {
+    return parseFloat(timezone.value) || 0
+}
+
+const formatDay = (day) => {
+    const date = new Date(year.value, 0, day);
+    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 // Helper function to convert time string to hours
