@@ -109,6 +109,23 @@ import { ref, onMounted, nextTick } from 'vue'
 import axios from 'axios'
 import Plotly from 'plotly.js-dist-min'
 
+// Planet colors matching the Haskell Almanac
+const planetColors = {
+  mercury: 'rgb(125, 125, 125)',  // light grey
+  venus: 'rgb(255, 220, 0)',      // yellow (slightly darker for visibility)
+  mars: 'rgb(255, 0, 0)',          // red
+  jupiter: 'rgb(255, 125, 0)',     // orange
+  saturn: 'rgb(125, 0, 255)',      // violet
+  uranus: 'rgb(0, 255, 255)',      // cyan
+  neptune: 'rgb(0, 125, 255)',     // ocean blue
+  pluto: 'rgb(100, 100, 100)'      // dark grey (slightly lighter for visibility)
+}
+
+// Inner planets show rise/set, outer planets show culmination
+const innerPlanets = ['mercury', 'venus']
+const outerPlanets = ['mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto']
+const allPlanets = [...innerPlanets, ...outerPlanets]
+
 // Form data
 const year = ref(new Date().getFullYear())
 const latitude = ref(58.378)
@@ -121,6 +138,7 @@ const loadingLocation = ref(false)
 const locationError = ref('')
 const error = ref('')
 const plotData = ref(null)
+const planetData = ref({})
 const plotContainer = ref(null)
 
 // Get current location
@@ -160,8 +178,8 @@ const generateAlmanac = async () => {
     const startDate = `${year.value}-01-01`
     const endDate = `${year.value}-12-31`
 
-    // Call EphemAPI
-    const response = await axios.get('http://localhost:3000/api/sunrise-sunset', {
+    // Call EphemAPI for sun data
+    const sunResponse = await axios.get('http://localhost:3000/api/sunrise-sunset', {
       params: {
         lat: latitude.value,
         lon: longitude.value,
@@ -170,11 +188,34 @@ const generateAlmanac = async () => {
       }
     })
 
-    plotData.value = response.data
+    plotData.value = sunResponse.data
+
+    // Fetch planet data for all planets in parallel
+    const planetPromises = allPlanets.map(planet =>
+      axios.get('http://localhost:3000/api/planet-sunrise-sunset', {
+        params: {
+          lat: latitude.value,
+          lon: longitude.value,
+          planet: planet,
+          startDate: startDate,
+          endDate: endDate
+        }
+      }).then(res => ({ planet, data: res.data }))
+       .catch(err => {
+         console.warn(`Failed to fetch ${planet} data:`, err.message)
+         return { planet, data: [] }
+       })
+    )
+
+    const planetResults = await Promise.all(planetPromises)
+    planetData.value = {}
+    planetResults.forEach(({ planet, data }) => {
+      planetData.value[planet] = data
+    })
 
     // Wait for DOM update and create plot
     await nextTick()
-    createPlot(response.data)
+    createPlot(sunResponse.data)
 
   } catch (err) {
     error.value = `Failed to fetch data: ${err.message}`
@@ -182,6 +223,315 @@ const generateAlmanac = async () => {
   } finally {
     loading.value = false
   }
+}
+
+// Create planet traces for visualization
+const createPlanetTraces = (sunData, offset) => {
+  const traces = []
+  const isLeapYear = (year.value % 4 === 0 && year.value % 100 !== 0) || (year.value % 400 === 0)
+
+  const plotLeft = 0
+  const plotRight = 24
+
+  // Build night boundaries array using the same logic as the sun visualization
+  // This handles polar night/day transitions correctly
+  const nightBoundaries = [] // Array of {dayOfYear, left, right} where left <= x <= right is night
+
+  let polarNight = true
+  let polarDay = false
+  let polarDayEnd = false
+
+  sunData.forEach((d, i) => {
+    const nextDayData = sunData[i + 1]
+    if (!nextDayData) return
+
+    const dayOfYear = i + 1
+
+    // Calculate sunset and sunrise in plot coordinates (same as sun visualization)
+    let sunset = d.error ? null : clip(timeToHours(d.sunset) + offset)
+    let sunrise = nextDayData.error ? null : clip(timeToHours(nextDayData.sunrise) + offset)
+    sunrise = !sunset ? null : sunrise
+    sunset = !sunrise ? null : sunset
+    if (sunset !== null && sunrise !== null && sunset > sunrise) {
+      sunset = null
+      sunrise = null
+    }
+
+    // Apply polar night/day state machine (same as sun visualization)
+    let nightLeft = null
+    let nightRight = null
+
+    if (sunset === null || sunrise === null) {
+      if (polarNight) {
+        nightLeft = plotLeft
+        nightRight = plotRight
+      } else if (polarDayEnd) {
+        polarNight = true
+        polarDayEnd = false
+        nightLeft = plotLeft
+        nightRight = plotRight
+      } else {
+        polarDay = true
+        // No night region during polar day
+        nightLeft = null
+        nightRight = null
+      }
+    } else {
+      polarNight = false
+      if (polarDay) {
+        polarDay = false
+        polarDayEnd = true
+      }
+      nightLeft = sunset
+      nightRight = sunrise
+    }
+
+    nightBoundaries.push({
+      dayOfYear,
+      left: nightLeft,
+      right: nightRight
+    })
+  })
+
+  // Helper to check if a point is within the night region
+  const isInNightRegion = (x, dayOfYear) => {
+    const boundary = nightBoundaries.find(b => b.dayOfYear === dayOfYear)
+    if (!boundary) return false
+    if (boundary.left === null || boundary.right === null) return false
+    // Night region is from left (sunset) to right (sunrise)
+    return x >= boundary.left && x <= boundary.right
+  }
+
+  // Process inner planets (Mercury, Venus) - show rise and set times
+  innerPlanets.forEach(planet => {
+    const pData = planetData.value[planet] || []
+    if (pData.length === 0) return
+
+    const riseXValues = []
+    const riseYValues = []
+    const setXValues = []
+    const setYValues = []
+    const riseDates = []
+    const setDates = []
+    const riseTexts = []
+    const setTexts = []
+
+    pData.forEach((d, i) => {
+      if (d.error) return
+
+      const dayOfYear = getDayOfYear(d.date, isLeapYear)
+      const riseHours = timeToHours(d.rise)
+      const setHours = timeToHours(d.set)
+
+      // Transform to plot coordinates
+      const riseX = clip(riseHours + offset)
+      const setX = clip(setHours + offset)
+
+      // Skip if set is later than rise (same check as sun)
+      if (setX > riseX) return
+
+      // Only show if within the night region (shaded area)
+      if (isInNightRegion(riseX, dayOfYear)) {
+        riseXValues.push(riseX)
+        riseYValues.push(dayOfYear)
+        riseDates.push(d.date)
+        riseTexts.push(shiftTime(d.rise, getTimeZone()))
+      }
+      if (isInNightRegion(setX, dayOfYear)) {
+        setXValues.push(setX)
+        setYValues.push(dayOfYear)
+        setDates.push(d.date)
+        setTexts.push(shiftTime(d.set, getTimeZone()))
+      }
+    })
+
+    // Split data at discontinuities (large jumps in x values)
+    const riseSegments = splitDataAtDiscontinuities(riseXValues, riseYValues, riseDates, riseTexts)
+    const setSegments = splitDataAtDiscontinuities(setXValues, setYValues, setDates, setTexts)
+
+    // Add rise traces
+    riseSegments.forEach(seg => {
+      if (seg.x.length > 1) {
+        traces.push({
+          x: seg.x,
+          y: seg.y,
+          mode: 'lines',
+          name: `${capitalize(planet)} Rise`,
+          line: { color: planetColors[planet], width: 2 },
+          legendgroup: planet,
+          showlegend: false,
+          hovertemplate: `${capitalize(planet)} Rise<br>%{customdata}<br>%{text}<extra></extra>`,
+          customdata: seg.dates.map(d => formatDateStr(d)),
+          text: seg.texts
+        })
+      }
+    })
+
+    // Add set traces
+    setSegments.forEach(seg => {
+      if (seg.x.length > 1) {
+        traces.push({
+          x: seg.x,
+          y: seg.y,
+          mode: 'lines',
+          name: `${capitalize(planet)} Set`,
+          line: { color: planetColors[planet], width: 2 },
+          legendgroup: planet,
+          showlegend: false,
+          hovertemplate: `${capitalize(planet)} Set<br>%{customdata}<br>%{text}<extra></extra>`,
+          customdata: seg.dates.map(d => formatDateStr(d)),
+          text: seg.texts
+        })
+      }
+    })
+
+    // Add a single legend entry for this planet
+    traces.push({
+      x: [null],
+      y: [null],
+      mode: 'lines',
+      name: capitalize(planet),
+      line: { color: planetColors[planet], width: 2 },
+      legendgroup: planet,
+      showlegend: true
+    })
+  })
+
+  // Process outer planets (Mars, Jupiter, Saturn, Uranus, Neptune, Pluto) - show culmination times
+  outerPlanets.forEach(planet => {
+    const pData = planetData.value[planet] || []
+    if (pData.length === 0) return
+
+    const culminationXValues = []
+    const culminationYValues = []
+    const culminationDates = []
+    const culminationTexts = []
+
+    pData.forEach((d, i) => {
+      if (d.error) return
+
+      const dayOfYear = getDayOfYear(d.date, isLeapYear)
+      const riseHours = timeToHours(d.rise)
+      const setHours = timeToHours(d.set)
+
+      // Calculate culmination (transit) time as midpoint between rise and set
+      let culmination
+      if (riseHours < setHours) {
+        culmination = (riseHours + setHours) / 2
+      } else {
+        // Rise is after set (object crosses midnight)
+        culmination = clip((riseHours - 24 + setHours) / 2)
+      }
+
+      // Transform to plot coordinates
+      const culminationX = clip(culmination + offset)
+
+      // Only show if within the night region (shaded area)
+      if (isInNightRegion(culminationX, dayOfYear)) {
+        culminationXValues.push(culminationX)
+        culminationYValues.push(dayOfYear)
+        culminationDates.push(d.date)
+        culminationTexts.push(hoursToTimeStr(clip(culmination + getTimeZone())))
+      }
+    })
+
+    // Split data at discontinuities
+    const segments = splitDataAtDiscontinuities(culminationXValues, culminationYValues, culminationDates, culminationTexts)
+
+    // Add culmination traces as lines
+    segments.forEach(seg => {
+      if (seg.x.length > 1) {
+        traces.push({
+          x: seg.x,
+          y: seg.y,
+          mode: 'lines',
+          name: `${capitalize(planet)} Culmination`,
+          line: { color: planetColors[planet], width: 2 },
+          legendgroup: planet,
+          showlegend: false,
+          hovertemplate: `${capitalize(planet)} Culmination<br>%{customdata}<br>%{text}<extra></extra>`,
+          customdata: seg.dates.map(d => formatDateStr(d)),
+          text: seg.texts
+        })
+      }
+    })
+
+    // Add a single legend entry for this planet
+    traces.push({
+      x: [null],
+      y: [null],
+      mode: 'lines',
+      name: `${capitalize(planet)} (culm.)`,
+      line: { color: planetColors[planet], width: 2 },
+      legendgroup: planet,
+      showlegend: true
+    })
+  })
+
+  return traces
+}
+
+// Split data arrays at discontinuities (large jumps)
+const splitDataAtDiscontinuities = (xValues, yValues, dates, texts) => {
+  const segments = []
+  let currentSegment = { x: [], y: [], dates: [], texts: [] }
+
+  for (let i = 0; i < xValues.length; i++) {
+    if (currentSegment.x.length === 0) {
+      currentSegment.x.push(xValues[i])
+      currentSegment.y.push(yValues[i])
+      currentSegment.dates.push(dates[i])
+      currentSegment.texts.push(texts[i])
+    } else {
+      const lastX = currentSegment.x[currentSegment.x.length - 1]
+      const lastY = currentSegment.y[currentSegment.y.length - 1]
+      // Check for discontinuity (x jump > 12 hours or y jump > 1 day)
+      if (Math.abs(xValues[i] - lastX) > 12 || Math.abs(yValues[i] - lastY) > 1) {
+        if (currentSegment.x.length > 0) {
+          segments.push(currentSegment)
+        }
+        currentSegment = { x: [], y: [], dates: [], texts: [] }
+      }
+      currentSegment.x.push(xValues[i])
+      currentSegment.y.push(yValues[i])
+      currentSegment.dates.push(dates[i])
+      currentSegment.texts.push(texts[i])
+    }
+  }
+
+  if (currentSegment.x.length > 0) {
+    segments.push(currentSegment)
+  }
+
+  return segments
+}
+
+// Helper to get day of year from date string
+const getDayOfYear = (dateStr, isLeapYear) => {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const daysInMonth = [31, isLeapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  let dayOfYear = d
+  for (let i = 0; i < m - 1; i++) {
+    dayOfYear += daysInMonth[i]
+  }
+  return dayOfYear
+}
+
+// Helper to capitalize first letter
+const capitalize = (str) => str.charAt(0).toUpperCase() + str.slice(1)
+
+// Helper to format date string for display
+const formatDateStr = (dateStr) => {
+  const date = new Date(dateStr)
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// Helper to convert hours to time string
+const hoursToTimeStr = (hours) => {
+  const h = Math.floor(hours)
+  const m = Math.floor((hours - h) * 60)
+  const s = Math.floor(((hours - h) * 60 - m) * 60)
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
 }
 
 // Create the hourglass plot
@@ -238,13 +588,14 @@ const createPlot = (data) => {
     x: sunsetXValues,
     y: yValues,
     mode: 'lines',
-    name: 'Sunset',
+    name: 'Sun',
     line: {
       color: 'rgb(0, 0, 255)',
       width: 2
     },
-    showlegend: false,
-    hovertemplate: '%{customdata}<br>Sunset: %{text}<extra></extra>',
+    legendgroup: 'sun',
+    showlegend: true,
+    hovertemplate: 'Sunset<br>%{customdata}<br>%{text}<extra></extra>',
     customdata: yValues.map(day => formatDay(day)),
     text: data.slice(0, -1).map(d => d.error ? "" : shiftTime(d.sunset, getTimeZone()))
   }
@@ -253,13 +604,14 @@ const createPlot = (data) => {
     x: sunriseXValues,
     y: yValues,
     mode: 'lines',
-    name: 'Sunrise',
+    name: 'Sun',
     line: {
       color: 'rgb(0, 0, 255)',
       width: 2
     },
+    legendgroup: 'sun',
     showlegend: false,
-    hovertemplate: '%{customdata}<br>Sunrise: %{text}<extra></extra>',
+    hovertemplate: 'Sunrise<br>%{customdata}<br>%{text}<extra></extra>',
     customdata: yValues.map(day => formatDay(day)),
     text: data.slice(1).map(d => d.error ? "" : shiftTime(d.sunrise, getTimeZone()))
   }
@@ -303,7 +655,10 @@ const createPlot = (data) => {
     })
   })
 
-  const traces = [sunsetTrace, sunriseTrace, ...nightBars]
+  // Create planet traces
+  const planetTraces = createPlanetTraces(data, offset)
+
+  const traces = [sunsetTrace, sunriseTrace, ...nightBars, ...planetTraces]
 
   // Create month labels and dividers
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -320,20 +675,6 @@ const createPlot = (data) => {
     const daysInMonth = new Date(year.value, month + 1, 0).getDate()
     const monthStart = dayCounter
     const monthMiddle = dayCounter + daysInMonth / 2
-
-    // Add month label to the left
-    annotations.push({
-      x: plotLeft - 0.5,
-      y: monthMiddle,
-      text: monthNames[month],
-      showarrow: false,
-      xanchor: 'right',
-      xref: 'x',
-      yref: 'y',
-      font: {
-        size: 11
-      }
-    })
 
     // Add month label on y-axis
     yTickVals.push(monthStart)
@@ -354,16 +695,13 @@ const createPlot = (data) => {
 
   // Layout configuration
   const layout = {
-    title: `Sun Rise and Set Times for ${year.value} (Lat: ${latitude.value.toFixed(4)}°, Lon: ${longitude.value.toFixed(4)}°)`,
+    title: `Sun & Planets for ${year.value} (Lat: ${latitude.value.toFixed(4)}°, Lon: ${longitude.value.toFixed(4)}°)`,
     xaxis: {
       title: 'Hours',
       range: [plotLeft, plotRight],
       tickmode: 'array',
       tickvals: range(plotLeft, plotRight),
-      ticktext: range(plotLeft, plotRight).map(n => clip(n - offset + getTimeZone()).toString().padStart(2, '0')),
-      zeroline: true,
-      zerolinecolor: 'rgba(0, 0, 0, 0.3)',
-      zerolinewidth: 2
+      ticktext: range(plotLeft, plotRight).map(n => clip(n - offset + getTimeZone()).toString().padStart(2, '0'))
     },
     yaxis: {
       title: 'Month',
@@ -376,8 +714,15 @@ const createPlot = (data) => {
     shapes: shapes,
     annotations: annotations,
     hovermode: 'closest',
-    showlegend: false,
-    height: 800,
+    showlegend: true,
+    legend: {
+      orientation: 'h',
+      yanchor: 'bottom',
+      y: 1.02,
+      xanchor: 'center',
+      x: 0.5
+    },
+    height: 850,
     margin: {
       l: 100,
       r: 50,
@@ -560,7 +905,7 @@ input:focus {
 
 .plot-container {
   width: 100%;
-  height: 800px;
+  height: 850px;
 }
 
 .error-msg {
