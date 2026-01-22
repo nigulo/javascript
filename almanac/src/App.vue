@@ -590,7 +590,7 @@ const createPlot = (data) => {
     mode: 'lines',
     name: 'Sun',
     line: {
-      color: 'rgb(0, 0, 255)',
+      color: 'rgb(200, 200, 255)',
       width: 2
     },
     legendgroup: 'sun',
@@ -606,7 +606,7 @@ const createPlot = (data) => {
     mode: 'lines',
     name: 'Sun',
     line: {
-      color: 'rgb(0, 0, 255)',
+      color: 'rgb(200, 200, 255)',
       width: 2
     },
     legendgroup: 'sun',
