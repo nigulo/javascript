@@ -121,7 +121,7 @@ const planetColors = {
   pluto: 'rgb(100, 100, 100)'      // dark grey (slightly lighter for visibility)
 }
 
-// Inner planets show rise/set, outer planets show culmination
+// Inner planets show rise/set, outer planets show transit
 const innerPlanets = ['mercury', 'venus']
 const outerPlanets = ['mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto']
 const allPlanets = [...innerPlanets, ...outerPlanets]
@@ -192,7 +192,7 @@ const generateAlmanac = async () => {
 
     // Fetch planet data for all planets in parallel
     const planetPromises = allPlanets.map(planet =>
-      axios.get('http://localhost:3000/api/planet-sunrise-sunset', {
+      axios.get('http://localhost:3000/api/planet-rise-set-transit', {
         params: {
           lat: latitude.value,
           lon: longitude.value,
@@ -315,6 +315,8 @@ const createPlanetTraces = (sunData, offset) => {
     const setDates = []
     const riseTexts = []
     const setTexts = []
+    const riseAzimuths = []
+    const setAzimuths = []
 
     pData.forEach((d, i) => {
       if (d.error) return
@@ -336,18 +338,20 @@ const createPlanetTraces = (sunData, offset) => {
         riseYValues.push(dayOfYear)
         riseDates.push(d.date)
         riseTexts.push(shiftTime(d.rise, getTimeZone()))
+        riseAzimuths.push(d.riseAzimuth?.toFixed(1) ?? "")
       }
       if (isInNightRegion(setX, dayOfYear)) {
         setXValues.push(setX)
         setYValues.push(dayOfYear)
         setDates.push(d.date)
         setTexts.push(shiftTime(d.set, getTimeZone()))
+        setAzimuths.push(d.setAzimuth?.toFixed(1) ?? "")
       }
     })
 
     // Split data at discontinuities (large jumps in x values)
-    const riseSegments = splitDataAtDiscontinuities(riseXValues, riseYValues, riseDates, riseTexts)
-    const setSegments = splitDataAtDiscontinuities(setXValues, setYValues, setDates, setTexts)
+    const riseSegments = splitDataAtDiscontinuities(riseXValues, riseYValues, riseDates, riseTexts, riseAzimuths)
+    const setSegments = splitDataAtDiscontinuities(setXValues, setYValues, setDates, setTexts, setAzimuths)
 
     // Add rise traces
     riseSegments.forEach(seg => {
@@ -360,9 +364,10 @@ const createPlanetTraces = (sunData, offset) => {
           line: { color: planetColors[planet], width: 2 },
           legendgroup: planet,
           showlegend: false,
-          hovertemplate: `${capitalize(planet)} Rise<br>%{customdata}<br>%{text}<extra></extra>`,
+          hovertemplate: `${capitalize(planet)} Rise<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}°<extra></extra>`,
           customdata: seg.dates.map(d => formatDateStr(d)),
-          text: seg.texts
+          text: seg.texts,
+          meta: seg.azimuths
         })
       }
     })
@@ -378,9 +383,10 @@ const createPlanetTraces = (sunData, offset) => {
           line: { color: planetColors[planet], width: 2 },
           legendgroup: planet,
           showlegend: false,
-          hovertemplate: `${capitalize(planet)} Set<br>%{customdata}<br>%{text}<extra></extra>`,
+          hovertemplate: `${capitalize(planet)} Set<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}°<extra></extra>`,
           customdata: seg.dates.map(d => formatDateStr(d)),
-          text: seg.texts
+          text: seg.texts,
+          meta: seg.azimuths
         })
       }
     })
@@ -397,61 +403,58 @@ const createPlanetTraces = (sunData, offset) => {
     })
   })
 
-  // Process outer planets (Mars, Jupiter, Saturn, Uranus, Neptune, Pluto) - show culmination times
+  // Process outer planets (Mars, Jupiter, Saturn, Uranus, Neptune, Pluto) - show transit times
   outerPlanets.forEach(planet => {
     const pData = planetData.value[planet] || []
     if (pData.length === 0) return
 
-    const culminationXValues = []
-    const culminationYValues = []
-    const culminationDates = []
-    const culminationTexts = []
+    const transitXValues = []
+    const transitYValues = []
+    const transitDates = []
+    const transitTexts = []
+    const transitMetas = []
 
     pData.forEach((d, i) => {
-      if (d.error) return
+      if (d.error || !d.transit) return
 
       const dayOfYear = getDayOfYear(d.date, isLeapYear)
-      const riseHours = timeToHours(d.rise)
-      const setHours = timeToHours(d.set)
 
-      // Calculate culmination (transit) time as midpoint between rise and set
-      let culmination
-      if (riseHours < setHours) {
-        culmination = (riseHours + setHours) / 2
-      } else {
-        // Rise is after set (object crosses midnight)
-        culmination = clip((riseHours - 24 + setHours) / 2)
-      }
+      // Use transit time from API
+      const transitHours = timeToHours(d.transit)
 
       // Transform to plot coordinates
-      const culminationX = clip(culmination + offset)
+      const transitX = clip(transitHours + offset)
 
       // Only show if within the night region (shaded area)
-      if (isInNightRegion(culminationX, dayOfYear)) {
-        culminationXValues.push(culminationX)
-        culminationYValues.push(dayOfYear)
-        culminationDates.push(d.date)
-        culminationTexts.push(hoursToTimeStr(clip(culmination + getTimeZone())))
+      if (isInNightRegion(transitX, dayOfYear)) {
+        transitXValues.push(transitX)
+        transitYValues.push(dayOfYear)
+        transitDates.push(d.date)
+        transitTexts.push(shiftTime(d.transit, getTimeZone()))
+        // Store altitude from API for hover display
+        const alt = d.transitAltitude?.toFixed(1) ?? ""
+        transitMetas.push(`Altitude: ${alt}°`)
       }
     })
 
     // Split data at discontinuities
-    const segments = splitDataAtDiscontinuities(culminationXValues, culminationYValues, culminationDates, culminationTexts)
+    const segments = splitDataAtDiscontinuities(transitXValues, transitYValues, transitDates, transitTexts, transitMetas)
 
-    // Add culmination traces as lines
+    // Add transit traces as lines
     segments.forEach(seg => {
       if (seg.x.length > 1) {
         traces.push({
           x: seg.x,
           y: seg.y,
           mode: 'lines',
-          name: `${capitalize(planet)} Culmination`,
+          name: `${capitalize(planet)} Transit`,
           line: { color: planetColors[planet], width: 2 },
           legendgroup: planet,
           showlegend: false,
-          hovertemplate: `${capitalize(planet)} Culmination<br>%{customdata}<br>%{text}<extra></extra>`,
+          hovertemplate: `${capitalize(planet)} Transit<br>%{customdata}<br>%{text}<br>%{meta}<extra></extra>`,
           customdata: seg.dates.map(d => formatDateStr(d)),
-          text: seg.texts
+          text: seg.texts,
+          meta: seg.azimuths
         })
       }
     })
@@ -461,7 +464,7 @@ const createPlanetTraces = (sunData, offset) => {
       x: [null],
       y: [null],
       mode: 'lines',
-      name: `${capitalize(planet)} (culm.)`,
+      name: `${capitalize(planet)}`,
       line: { color: planetColors[planet], width: 2 },
       legendgroup: planet,
       showlegend: true
@@ -472,9 +475,9 @@ const createPlanetTraces = (sunData, offset) => {
 }
 
 // Split data arrays at discontinuities (large jumps)
-const splitDataAtDiscontinuities = (xValues, yValues, dates, texts) => {
+const splitDataAtDiscontinuities = (xValues, yValues, dates, texts, azimuths = null) => {
   const segments = []
-  let currentSegment = { x: [], y: [], dates: [], texts: [] }
+  let currentSegment = { x: [], y: [], dates: [], texts: [], azimuths: [] }
 
   for (let i = 0; i < xValues.length; i++) {
     if (currentSegment.x.length === 0) {
@@ -482,6 +485,7 @@ const splitDataAtDiscontinuities = (xValues, yValues, dates, texts) => {
       currentSegment.y.push(yValues[i])
       currentSegment.dates.push(dates[i])
       currentSegment.texts.push(texts[i])
+      if (azimuths) currentSegment.azimuths.push(azimuths[i])
     } else {
       const lastX = currentSegment.x[currentSegment.x.length - 1]
       const lastY = currentSegment.y[currentSegment.y.length - 1]
@@ -490,12 +494,13 @@ const splitDataAtDiscontinuities = (xValues, yValues, dates, texts) => {
         if (currentSegment.x.length > 0) {
           segments.push(currentSegment)
         }
-        currentSegment = { x: [], y: [], dates: [], texts: [] }
+        currentSegment = { x: [], y: [], dates: [], texts: [], azimuths: [] }
       }
       currentSegment.x.push(xValues[i])
       currentSegment.y.push(yValues[i])
       currentSegment.dates.push(dates[i])
       currentSegment.texts.push(texts[i])
+      if (azimuths) currentSegment.azimuths.push(azimuths[i])
     }
   }
 
@@ -594,10 +599,11 @@ const createPlot = (data) => {
       width: 2
     },
     legendgroup: 'sun',
-    showlegend: true,
-    hovertemplate: 'Sunset<br>%{customdata}<br>%{text}<extra></extra>',
+    showlegend: false,
+    hovertemplate: 'Sunset<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}°<extra></extra>',
     customdata: yValues.map(day => formatDay(day)),
-    text: data.slice(0, -1).map(d => d.error ? "" : shiftTime(d.sunset, getTimeZone()))
+    text: data.slice(0, -1).map(d => d.error ? "" : shiftTime(d.sunset, getTimeZone())),
+    meta: data.slice(0, -1).map(d => d.error ? "" : d.sunsetAzimuth?.toFixed(1) ?? "")
   }
 
   const sunriseTrace = {
@@ -611,9 +617,10 @@ const createPlot = (data) => {
     },
     legendgroup: 'sun',
     showlegend: false,
-    hovertemplate: 'Sunrise<br>%{customdata}<br>%{text}<extra></extra>',
+    hovertemplate: 'Sunrise<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}°<extra></extra>',
     customdata: yValues.map(day => formatDay(day)),
-    text: data.slice(1).map(d => d.error ? "" : shiftTime(d.sunrise, getTimeZone()))
+    text: data.slice(1).map(d => d.error ? "" : shiftTime(d.sunrise, getTimeZone())),
+    meta: data.slice(1).map(d => d.error ? "" : d.sunriseAzimuth?.toFixed(1) ?? "")
   }
 
   let polarNight = true
