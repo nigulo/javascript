@@ -139,7 +139,32 @@ const locationError = ref('')
 const error = ref('')
 const plotData = ref(null)
 const planetData = ref({})
+const moonData = ref([])
 const plotContainer = ref(null)
+
+// Moon phase nominal elongation values (degrees)
+const moonPhaseNominalElongation = {
+  'New Moon': 0,
+  'Waxing Crescent': 45,
+  'First Quarter': 90,
+  'Waxing Gibbous': 135,
+  'Full Moon': 180,
+  'Waning Gibbous': 225,
+  'Last Quarter': 270,
+  'Waning Crescent': 315
+}
+
+// Moon horizontal position (fraction between sunset and sunrise)
+const moonPhasePosition = {
+  'New Moon': 0.5,        // Not drawn, but define for completeness
+  'Waxing Crescent': 0.05,
+  'First Quarter': 0.2,
+  'Waxing Gibbous': 0.35,
+  'Full Moon': 0.5,
+  'Waning Gibbous': 0.65,
+  'Last Quarter': 0.8,
+  'Waning Crescent': 0.95
+}
 
 // Get current location
 const getCurrentLocation = () => {
@@ -212,6 +237,22 @@ const generateAlmanac = async () => {
     planetResults.forEach(({ planet, data }) => {
       planetData.value[planet] = data
     })
+
+    // Fetch moon phase data
+    try {
+      const moonResponse = await axios.get('http://localhost:3000/api/moon-phase', {
+        params: {
+          lat: latitude.value,
+          lon: longitude.value,
+          startDate: startDate,
+          endDate: endDate
+        }
+      })
+      moonData.value = moonResponse.data
+    } catch (err) {
+      console.warn('Failed to fetch moon data:', err.message)
+      moonData.value = []
+    }
 
     // Wait for DOM update and create plot
     await nextTick()
@@ -474,6 +515,365 @@ const createPlanetTraces = (sunData, offset) => {
   return traces
 }
 
+// Create moon traces for visualization
+const createMoonTracesAndImages = (sunData, offset) => {
+  const traces = []
+  const images = []
+  const isLeapYear = (year.value % 4 === 0 && year.value % 100 !== 0) || (year.value % 400 === 0)
+
+  if (!moonData.value || moonData.value.length === 0) {
+    return [traces, images]
+  }
+
+  // Build night boundaries for positioning (same as planet traces)
+  const nightBoundaries = []
+  let polarNight = true
+  let polarDay = false
+  let polarDayEnd = false
+
+  sunData.forEach((d, i) => {
+    const nextDayData = sunData[i + 1]
+    if (!nextDayData) return
+
+    const dayOfYear = i + 1
+    let sunset = d.error ? null : clip(timeToHours(d.sunset) + offset)
+    let sunrise = nextDayData.error ? null : clip(timeToHours(nextDayData.sunrise) + offset)
+    sunrise = !sunset ? null : sunrise
+    sunset = !sunrise ? null : sunset
+    if (sunset !== null && sunrise !== null && sunset > sunrise) {
+      sunset = null
+      sunrise = null
+    }
+
+    let nightLeft = null
+    let nightRight = null
+
+    if (sunset === null || sunrise === null) {
+      if (polarNight) {
+        nightLeft = 0
+        nightRight = 24
+      } else if (polarDayEnd) {
+        polarNight = true
+        polarDayEnd = false
+        nightLeft = 0
+        nightRight = 24
+      } else {
+        polarDay = true
+        nightLeft = null
+        nightRight = null
+      }
+    } else {
+      polarNight = false
+      if (polarDay) {
+        polarDay = false
+        polarDayEnd = true
+      }
+      nightLeft = sunset
+      nightRight = sunrise
+    }
+
+    nightBoundaries.push({
+      dayOfYear,
+      left: nightLeft,
+      right: nightRight
+    })
+  })
+
+  // Find the best day for each phase (closest to nominal elongation)
+  const phaseOccurrences = {}
+  const phaseNames = Object.keys(moonPhaseNominalElongation)
+
+  // Group moon data by phase name and find the best occurrence for each lunar cycle
+  phaseNames.forEach(phaseName => {
+    phaseOccurrences[phaseName] = []
+  })
+
+  // Track phase transitions to identify distinct lunar cycles
+  let currentPhaseIndex = -1
+  let cycleData = {}
+
+  moonData.value.forEach((d, i) => {
+    const phaseName = d.phaseName
+    const phaseIndex = phaseNames.indexOf(phaseName)
+
+    // Detect new lunar cycle (when we go from a later phase back to an earlier one)
+    if (phaseIndex < currentPhaseIndex || (currentPhaseIndex === -1)) {
+      // Save the best occurrences from the previous cycle
+      phaseNames.forEach(name => {
+        if (cycleData[name]) {
+          phaseOccurrences[name].push(cycleData[name])
+        }
+      })
+      cycleData = {}
+    }
+    currentPhaseIndex = phaseIndex
+
+    const nominalElong = moonPhaseNominalElongation[phaseName]
+    const elongDiff = Math.abs(d.elongation - nominalElong)
+
+    // Keep track of the best (closest to nominal) occurrence for each phase in this cycle
+    if (!cycleData[phaseName] || elongDiff < cycleData[phaseName].elongDiff) {
+      cycleData[phaseName] = {
+        data: d,
+        dayIndex: i,
+        elongDiff: elongDiff
+      }
+    }
+  })
+
+  // Don't forget the last cycle
+  phaseNames.forEach(name => {
+    if (cycleData[name]) {
+      phaseOccurrences[name].push(cycleData[name])
+    }
+  })
+
+  // Create traces for each phase occurrence (except New Moon)
+  phaseNames.forEach(phaseName => {
+    if (phaseName === 'New Moon') return // Skip new moon
+
+    const occurrences = phaseOccurrences[phaseName]
+    if (!occurrences || occurrences.length === 0) return
+
+    const xValues = []
+    const yValues = []
+    const hoverTexts = []
+    const customDatas = []
+
+    occurrences.forEach(occ => {
+      const d = occ.data
+      const dayOfYear = getDayOfYear(d.date, isLeapYear)
+      const boundary = nightBoundaries.find(b => b.dayOfYear === dayOfYear)
+
+      if (!boundary || boundary.left === null || boundary.right === null) return
+
+      // Calculate x position based on phase position fraction
+      const positionFraction = moonPhasePosition[phaseName]
+      const nightWidth = boundary.right - boundary.left
+      const xPos = boundary.left + nightWidth * positionFraction
+
+      xValues.push(xPos)
+      yValues.push(dayOfYear)
+
+      // Build hover text
+      const riseText = d.moonrise ? shiftTime(d.moonrise, getTimeZone()) : 'N/A'
+      const setText = d.moonset ? shiftTime(d.moonset, getTimeZone()) : 'N/A'
+      hoverTexts.push(`Rise: ${riseText}<br>Set: ${setText}`)
+      customDatas.push(formatDateStr(d.date))
+
+      images.push({
+        source: getMoonImageSrc(phaseName),
+        x: xPos,
+        y: dayOfYear,
+        xref: 'x',
+        yref: 'y',
+        xanchor: 'center',
+        yanchor: 'middle',
+        sizex: 6,
+        sizey: 6,
+        sizing: 'contain',
+        layer: 'above'
+      })
+
+    })
+
+    if (xValues.length === 0) return
+
+    // Get custom SVG path symbol for this phase
+    const symbolPath = getMoonSymbolPath(phaseName)
+
+    // Create invisible markers for hover functionality (images provide the visual)
+    traces.push({
+      x: xValues,
+      y: yValues,
+      mode: 'markers',
+      name: phaseName,
+      marker: {
+        symbol: 'circle',
+        size: 20,
+        color: 'rgba(0, 0, 0, 0)',  // Invisible marker
+        line: {
+          width: 0
+        }
+      },
+      legendgroup: 'moon',
+      showlegend: false,
+      hovertemplate: `${phaseName}<br>%{customdata}<br>%{text}<extra></extra>`,
+      customdata: customDatas,
+      text: hoverTexts
+    })
+  })
+
+  // Add a single legend entry for Moon
+  traces.push({
+    x: [null],
+    y: [null],
+    mode: 'markers',
+    name: 'Moon',
+    marker: {
+      symbol: 'circle',
+      size: 10,
+      color: 'gold',
+      line: {
+        color: 'goldenrod',
+        width: 1
+      }
+    },
+    legendgroup: 'moon',
+    showlegend: true
+  })
+
+  return [traces, images]
+}
+
+// Get SVG path symbol for moon phase (used with Plotly marker symbol: 'path://...')
+// These paths are centered at origin and sized for marker display
+// Using cubic Bezier curves to approximate circular arcs since Plotly doesn't support 'A' command
+const getMoonSymbolPath = (phaseName) => {
+  // Circle approximation using cubic Bezier curves
+  // Magic number for circular arc approximation: k = 0.5522847498
+  const k = 0.552
+  const r = 1  // Unit radius, will be scaled by marker size
+
+  // Full circle path using 4 cubic Bezier curves
+  const fullCircle = `M 0 -${r} C ${r*k} -${r} ${r} -${r*k} ${r} 0 C ${r} ${r*k} ${r*k} ${r} 0 ${r} C -${r*k} ${r} -${r} ${r*k} -${r} 0 C -${r} -${r*k} -${r*k} -${r} 0 -${r} Z`
+
+  // Right half circle (first quarter - right side lit)
+  const rightHalf = `M 0 -${r} C ${r*k} -${r} ${r} -${r*k} ${r} 0 C ${r} ${r*k} ${r*k} ${r} 0 ${r} L 0 -${r} Z`
+
+  // Left half circle (last quarter - left side lit)
+  const leftHalf = `M 0 -${r} L 0 ${r} C -${r*k} ${r} -${r} ${r*k} -${r} 0 C -${r} -${r*k} -${r*k} -${r} 0 -${r} Z`
+
+  // Crescent shapes - outer arc + inner concave curve
+  // Waxing crescent: thin sliver on right
+  const crescentInner = 0.5  // How much the inner curve bows inward
+  const waxingCrescent = `M 0 -${r} C ${r*k} -${r} ${r} -${r*k} ${r} 0 C ${r} ${r*k} ${r*k} ${r} 0 ${r} C ${crescentInner*k} ${r} ${crescentInner} ${r*k} ${crescentInner} 0 C ${crescentInner} -${r*k} ${crescentInner*k} -${r} 0 -${r} Z`
+
+  // Waning crescent: thin sliver on left
+  const waningCrescent = `M 0 -${r} C -${crescentInner*k} -${r} -${crescentInner} -${r*k} -${crescentInner} 0 C -${crescentInner} ${r*k} -${crescentInner*k} ${r} 0 ${r} C -${r*k} ${r} -${r} ${r*k} -${r} 0 C -${r} -${r*k} -${r*k} -${r} 0 -${r} Z`
+
+  // Gibbous shapes - full circle minus small crescent shadow
+  const gibbousInner = 0.4  // Shadow depth
+  // Waxing gibbous: small shadow on left, mostly lit
+  const waxingGibbous = `M 0 -${r} C ${r*k} -${r} ${r} -${r*k} ${r} 0 C ${r} ${r*k} ${r*k} ${r} 0 ${r} C -${r*k} ${r} -${r} ${r*k} -${r} 0 C -${r} -${r*k} -${r*k} -${r} 0 -${r} M 0 -${r} C -${gibbousInner*k} -${r} -${gibbousInner} -${r*k} -${gibbousInner} 0 C -${gibbousInner} ${r*k} -${gibbousInner*k} ${r} 0 ${r}`
+
+  // Waning gibbous: small shadow on right, mostly lit
+  const waningGibbous = `M 0 -${r} C -${r*k} -${r} -${r} -${r*k} -${r} 0 C -${r} ${r*k} -${r*k} ${r} 0 ${r} C ${r*k} ${r} ${r} ${r*k} ${r} 0 C ${r} -${r*k} ${r*k} -${r} 0 -${r} M 0 -${r} C ${gibbousInner*k} -${r} ${gibbousInner} -${r*k} ${gibbousInner} 0 C ${gibbousInner} ${r*k} ${gibbousInner*k} ${r} 0 ${r}`
+
+  switch (phaseName) {
+    case 'Full Moon':
+      return 'circle'  // Use built-in circle for full moon
+
+    case 'First Quarter':
+      return `path://${rightHalf}`
+
+    case 'Last Quarter':
+      return `path://${leftHalf}`
+
+    case 'Waxing Crescent':
+      return `path://${waxingCrescent}`
+
+    case 'Waning Crescent':
+      return `path://${waningCrescent}`
+
+    case 'Waxing Gibbous':
+      return `path://${waxingGibbous}`
+
+    case 'Waning Gibbous':
+      return `path://${waningGibbous}`
+
+    default:
+      return 'circle'
+  }
+}
+
+const getMoonImageSrc = (phaseName) => {
+  const r = 10;
+  const k = 0.552; // Bezier approximation constant for circular arcs
+
+  // Full circle path for shadow/dark side
+  const fullCircle = `M 0,-${r} C ${r*k},-${r} ${r},-${r*k} ${r},0 C ${r},${r*k} ${r*k},${r} 0,${r} C -${r*k},${r} -${r},${r*k} -${r},0 C -${r},-${r*k} -${r*k},-${r} 0,-${r} Z`;
+
+  let litPath = '';
+
+  switch (phaseName) {
+    case 'New Moon':
+      // Only shadow, no lit portion
+      litPath = '';
+      break;
+
+    case 'Full Moon':
+      // Entire moon is lit
+      litPath = fullCircle;
+      break;
+
+    case 'First Quarter':
+      // Right half lit
+      litPath = `M 0,-${r}
+           C ${r*k},-${r} ${r},-${r*k} ${r},0
+           C ${r},${r*k} ${r*k},${r} 0,${r}
+           L 0,-${r} Z`;
+      break;
+
+    case 'Last Quarter':
+      // Left half lit
+      litPath = `M 0,-${r}
+           L 0,${r}
+           C -${r*k},${r} -${r},${r*k} -${r},0
+           C -${r},-${r*k} -${r*k},-${r} 0,-${r} Z`;
+      break;
+
+    case 'Waxing Crescent':
+      // Thin crescent on right side
+      litPath = `M 0,-${r}
+           C ${r*k},-${r} ${r},-${r*k} ${r},0
+           C ${r},${r*k} ${r*k},${r} 0,${r}
+           C ${r*0.3},${r*0.8} ${r*0.5},${r*0.4} ${r*0.5},0
+           C ${r*0.5},-${r*0.4} ${r*0.3},-${r*0.8} 0,-${r} Z`;
+      break;
+
+    case 'Waning Crescent':
+      // Thin crescent on left side
+      litPath = `M 0,-${r}
+           C -${r*0.3},-${r*0.8} -${r*0.5},-${r*0.4} -${r*0.5},0
+           C -${r*0.5},${r*0.4} -${r*0.3},${r*0.8} 0,${r}
+           C -${r*k},${r} -${r},${r*k} -${r},0
+           C -${r},-${r*k} -${r*k},-${r} 0,-${r} Z`;
+      break;
+
+    case 'Waxing Gibbous':
+      // Most of moon lit except small crescent on left
+      litPath = `M 0,-${r}
+           C ${r*k},-${r} ${r},-${r*k} ${r},0
+           C ${r},${r*k} ${r*k},${r} 0,${r}
+           C -${r*0.3},${r*0.8} -${r*0.5},${r*0.4} -${r*0.5},0
+           C -${r*0.5},-${r*0.4} -${r*0.3},-${r*0.8} 0,-${r} Z`;
+      break;
+
+    case 'Waning Gibbous':
+      // Most of moon lit except small crescent on right
+      litPath = `M 0,-${r}
+           C ${r*0.3},-${r*0.8} ${r*0.5},-${r*0.4} ${r*0.5},0
+           C ${r*0.5},${r*0.4} ${r*0.3},${r*0.8} 0,${r}
+           C -${r*k},${r} -${r},${r*k} -${r},0
+           C -${r},-${r*k} -${r*k},-${r} 0,-${r} Z`;
+      break;
+
+    default:
+      litPath = fullCircle;
+  }
+
+  // Build SVG with shadow circle behind and lit portion on top
+  const shadowPath = `<path d="${fullCircle}" fill="#404050" stroke="goldenrod" stroke-width="0.5"/>`;
+  const litPathElement = litPath ? `<path d="${litPath}" fill="gold" stroke="none"/>` : '';
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 -12 24 24">
+                ${shadowPath}
+                ${litPathElement}
+               </svg>`;
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+};
+
 // Split data arrays at discontinuities (large jumps)
 const splitDataAtDiscontinuities = (xValues, yValues, dates, texts, azimuths = null) => {
   const segments = []
@@ -665,12 +1065,16 @@ const createPlot = (data) => {
   // Create planet traces
   const planetTraces = createPlanetTraces(data, offset)
 
-  const traces = [sunsetTrace, sunriseTrace, ...nightBars, ...planetTraces]
+  // Create moon traces
+  const [moonTraces, moonImages] = createMoonTracesAndImages(data, offset)
+
+  const traces = [sunsetTrace, sunriseTrace, ...nightBars, ...planetTraces, ...moonTraces]
 
   // Create month labels and dividers
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const shapes = []
+  const images = [...moonImages]
   const annotations = []
 
   // Y-axis custom tick labels
@@ -702,9 +1106,12 @@ const createPlot = (data) => {
 
   // Layout configuration
   const layout = {
-    title: `Sun & Planets for ${year.value} (Lat: ${latitude.value.toFixed(4)}°, Lon: ${longitude.value.toFixed(4)}°)`,
+    title: `Sun, Planets & Moon for ${year.value} (Lat: ${latitude.value.toFixed(4)}°, Lon: ${longitude.value.toFixed(4)}°)`,
     xaxis: {
-      title: 'Hours',
+      title: {
+        text: 'Time',
+        standoff: 10
+      },
       range: [plotLeft, plotRight],
       tickmode: 'array',
       tickvals: range(plotLeft, plotRight),
@@ -719,6 +1126,7 @@ const createPlot = (data) => {
       showticklabels: true,
     },
     shapes: shapes,
+    images: images,
     annotations: annotations,
     hovermode: 'closest',
     showlegend: true,
@@ -734,9 +1142,9 @@ const createPlot = (data) => {
       l: 100,
       r: 50,
       t: 80,
-      b: 80
+      b: 100
     }
-  }
+}
 
   const config = {
     responsive: true,
