@@ -679,9 +679,6 @@ const createMoonTracesAndImages = (sunData, offset) => {
 
     if (xValues.length === 0) return
 
-    // Get custom SVG path symbol for this phase
-    const symbolPath = getMoonSymbolPath(phaseName)
-
     // Create invisible markers for hover functionality (images provide the visual)
     traces.push({
       x: xValues,
@@ -724,67 +721,6 @@ const createMoonTracesAndImages = (sunData, offset) => {
   })
 
   return [traces, images]
-}
-
-// Get SVG path symbol for moon phase (used with Plotly marker symbol: 'path://...')
-// These paths are centered at origin and sized for marker display
-// Using cubic Bezier curves to approximate circular arcs since Plotly doesn't support 'A' command
-const getMoonSymbolPath = (phaseName) => {
-  // Circle approximation using cubic Bezier curves
-  // Magic number for circular arc approximation: k = 0.5522847498
-  const k = 0.552
-  const r = 1  // Unit radius, will be scaled by marker size
-
-  // Full circle path using 4 cubic Bezier curves
-  const fullCircle = `M 0 -${r} C ${r*k} -${r} ${r} -${r*k} ${r} 0 C ${r} ${r*k} ${r*k} ${r} 0 ${r} C -${r*k} ${r} -${r} ${r*k} -${r} 0 C -${r} -${r*k} -${r*k} -${r} 0 -${r} Z`
-
-  // Right half circle (first quarter - right side lit)
-  const rightHalf = `M 0 -${r} C ${r*k} -${r} ${r} -${r*k} ${r} 0 C ${r} ${r*k} ${r*k} ${r} 0 ${r} L 0 -${r} Z`
-
-  // Left half circle (last quarter - left side lit)
-  const leftHalf = `M 0 -${r} L 0 ${r} C -${r*k} ${r} -${r} ${r*k} -${r} 0 C -${r} -${r*k} -${r*k} -${r} 0 -${r} Z`
-
-  // Crescent shapes - outer arc + inner concave curve
-  // Waxing crescent: thin sliver on right
-  const crescentInner = 0.5  // How much the inner curve bows inward
-  const waxingCrescent = `M 0 -${r} C ${r*k} -${r} ${r} -${r*k} ${r} 0 C ${r} ${r*k} ${r*k} ${r} 0 ${r} C ${crescentInner*k} ${r} ${crescentInner} ${r*k} ${crescentInner} 0 C ${crescentInner} -${r*k} ${crescentInner*k} -${r} 0 -${r} Z`
-
-  // Waning crescent: thin sliver on left
-  const waningCrescent = `M 0 -${r} C -${crescentInner*k} -${r} -${crescentInner} -${r*k} -${crescentInner} 0 C -${crescentInner} ${r*k} -${crescentInner*k} ${r} 0 ${r} C -${r*k} ${r} -${r} ${r*k} -${r} 0 C -${r} -${r*k} -${r*k} -${r} 0 -${r} Z`
-
-  // Gibbous shapes - full circle minus small crescent shadow
-  const gibbousInner = 0.4  // Shadow depth
-  // Waxing gibbous: small shadow on left, mostly lit
-  const waxingGibbous = `M 0 -${r} C ${r*k} -${r} ${r} -${r*k} ${r} 0 C ${r} ${r*k} ${r*k} ${r} 0 ${r} C -${r*k} ${r} -${r} ${r*k} -${r} 0 C -${r} -${r*k} -${r*k} -${r} 0 -${r} M 0 -${r} C -${gibbousInner*k} -${r} -${gibbousInner} -${r*k} -${gibbousInner} 0 C -${gibbousInner} ${r*k} -${gibbousInner*k} ${r} 0 ${r}`
-
-  // Waning gibbous: small shadow on right, mostly lit
-  const waningGibbous = `M 0 -${r} C -${r*k} -${r} -${r} -${r*k} -${r} 0 C -${r} ${r*k} -${r*k} ${r} 0 ${r} C ${r*k} ${r} ${r} ${r*k} ${r} 0 C ${r} -${r*k} ${r*k} -${r} 0 -${r} M 0 -${r} C ${gibbousInner*k} -${r} ${gibbousInner} -${r*k} ${gibbousInner} 0 C ${gibbousInner} ${r*k} ${gibbousInner*k} ${r} 0 ${r}`
-
-  switch (phaseName) {
-    case 'Full Moon':
-      return 'circle'  // Use built-in circle for full moon
-
-    case 'First Quarter':
-      return `path://${rightHalf}`
-
-    case 'Last Quarter':
-      return `path://${leftHalf}`
-
-    case 'Waxing Crescent':
-      return `path://${waxingCrescent}`
-
-    case 'Waning Crescent':
-      return `path://${waningCrescent}`
-
-    case 'Waxing Gibbous':
-      return `path://${waxingGibbous}`
-
-    case 'Waning Gibbous':
-      return `path://${waningGibbous}`
-
-    default:
-      return 'circle'
-  }
 }
 
 const getMoonImageSrc = (phaseName) => {
@@ -933,10 +869,16 @@ const formatDateStr = (dateStr) => {
 
 // Helper to convert hours to time string
 const hoursToTimeStr = (hours) => {
-  const h = Math.floor(hours)
-  const m = Math.floor((hours - h) * 60)
-  const s = Math.floor(((hours - h) * 60 - m) * 60)
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  let h = Math.floor(hours)
+  let m = Math.round((hours - h) * 60)
+  if (m >= 60) {
+    m = 0
+    h++
+    if (h >= 24) {
+      h = 0
+    }
+  }
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}}`
 }
 
 // Create the hourglass plot
@@ -1165,10 +1107,17 @@ function shiftTime(timeStr, hours) {
     const [h, m, s] = timeStr.split(':').map(Number);
     const totalSeconds = (h * 3600 + m * 60 + s) + hours * 3600;
     const normalized = ((totalSeconds % 86400) + 86400) % 86400; // Keep in 0–86399
-    const hh = Math.floor(normalized / 3600);
-    const mm = Math.floor((normalized % 3600) / 60);
-    const ss = Math.floor(normalized % 60);
-    return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}:${ss.toString().padStart(2, '0')}`;
+    let hh = Math.floor(normalized / 3600);
+    let mm = Math.round((normalized % 3600) / 60);
+    if (mm >= 60) {
+        mm = 0
+        hh++
+        if (hh >= 24) {
+            hh = 0
+        }
+    }
+
+    return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}`;
 }
 
 const getTimeZone = () => {
