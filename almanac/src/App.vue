@@ -546,7 +546,7 @@ const createPlanetTraces = (sunData, offset) => {
           line: { color: planetColors[planet], width: 2 },
           legendgroup: planet,
           showlegend: false,
-          hovertemplate: `${capitalize(planet)} Rise (Morning Star)<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}<br>Altitude at sunrise: %{hovertext}<extra></extra>`,
+          hovertemplate: `${capitalize(planet)} rises<br>%{customdata} at %{text}<br>Azimuth: %{meta}<br>Altitude at sunrise: %{hovertext}<extra></extra>`,
           customdata: seg.dates.map(d => formatDateStr(d)),
           text: seg.texts,
           meta: seg.azimuths,
@@ -566,7 +566,7 @@ const createPlanetTraces = (sunData, offset) => {
           line: { color: planetColors[planet], width: 2 },
           legendgroup: planet,
           showlegend: false,
-          hovertemplate: `${capitalize(planet)} Set (Evening Star)<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}<br>Altitude at sunset: %{hovertext}<extra></extra>`,
+          hovertemplate: `${capitalize(planet)} sets<br>%{customdata} at %{text}<br>Azimuth: %{meta}<br>Altitude at sunset: %{hovertext}<extra></extra>`,
           customdata: seg.dates.map(d => formatDateStr(d)),
           text: seg.texts,
           meta: seg.azimuths,
@@ -615,9 +615,11 @@ const createPlanetTraces = (sunData, offset) => {
         transitYValues.push(dayOfYear)
         transitDates.push(d.date)
         transitTexts.push(shiftTime(d.transit, getTimeZone()))
-        // Store altitude from API for hover display
+        // Store altitude and rise/set times for hover display
         const alt = d.transitAltitude != null ? `${d.transitAltitude.toFixed(1)}°` : "N/A"
-        transitMetas.push(`Altitude: ${alt}`)
+        const rise = d.rise ? shiftTime(d.rise, getTimeZone()) : "N/A"
+        const set = d.set ? shiftTime(d.set, getTimeZone()) : "N/A"
+        transitMetas.push(`Altitude: ${alt}<br>Rise: ${rise}<br>Set: ${set}`)
       }
     })
 
@@ -631,11 +633,11 @@ const createPlanetTraces = (sunData, offset) => {
           x: seg.x,
           y: seg.y,
           mode: 'lines',
-          name: `${capitalize(planet)} Transit`,
+          name: `${capitalize(planet)} transit`,
           line: { color: planetColors[planet], width: 2 },
           legendgroup: planet,
           showlegend: false,
-          hovertemplate: `${capitalize(planet)} Transit<br>%{customdata}<br>%{text}<br>%{meta}<extra></extra>`,
+          hovertemplate: `${capitalize(planet)} transits<br>%{customdata} at %{text}<br>%{meta}<extra></extra>`,
           customdata: seg.dates.map(d => formatDateStr(d)),
           text: seg.texts,
           meta: seg.azimuths
@@ -1308,10 +1310,10 @@ const createPlot = (data) => {
     },
     height: 850,
     margin: {
-      l: 100,
-      r: 50,
-      t: 80,
-      b: 100
+      l: 60,
+      r: 20,
+      t: 60,
+      b: 40
     }
 }
 
@@ -1321,7 +1323,12 @@ const createPlot = (data) => {
     displaylogo: false
   }
 
-  Plotly.newPlot(plotContainer.value, traces, layout, config)
+  Plotly.newPlot(plotContainer.value, traces, layout, config).then(() => {
+    // Force resize after initial render to fix container height issues
+    setTimeout(() => {
+      Plotly.Plots.resize(plotContainer.value)
+    }, 100)
+  })
 }
 
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
@@ -1490,7 +1497,7 @@ input:focus {
 .plot-card {
   background: white;
   border-radius: 8px;
-  padding: 24px;
+  padding: 8px;
   box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 
