@@ -126,6 +126,12 @@ const innerPlanets = ['mercury', 'venus']
 const outerPlanets = ['mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto']
 const allPlanets = [...innerPlanets, ...outerPlanets]
 
+// Store altitude data for inner planets at sunrise/sunset
+const innerPlanetAltitudes = ref({})
+
+// Store equinox data for polar regions
+const equinoxData = ref(null)
+
 // Form data
 const year = ref(new Date().getFullYear())
 const latitude = ref(58.378)
@@ -254,6 +260,88 @@ const generateAlmanac = async () => {
       moonData.value = []
     }
 
+    // Fetch altitude data for inner planets (Mercury, Venus) at sunrise/sunset times
+    innerPlanetAltitudes.value = {}
+    for (const planet of innerPlanets) {
+      const pData = planetData.value[planet] || []
+      const altitudes = {}
+
+      // Build batch requests for altitude at sunrise and sunset
+      const altitudePromises = []
+
+      for (const dayData of pData) {
+        if (dayData.error) continue
+
+        // Find matching sun data for this date
+        const sunDay = sunResponse.data.find(s => s.date === dayData.date)
+        if (!sunDay || sunDay.error) continue
+
+        // For evening star (set after sunset): get altitude at sunset
+        if (dayData.set && sunDay.sunset) {
+          const datetime = `${dayData.date} ${sunDay.sunset.substring(0, 5)}`
+          altitudePromises.push(
+            axios.get('http://localhost:3000/api/celestial-position', {
+              params: {
+                lat: latitude.value,
+                lon: longitude.value,
+                planet: planet,
+                datetime: datetime
+              }
+            }).then(res => ({
+              date: dayData.date,
+              type: 'sunset',
+              altitude: res.data.altitude
+            })).catch(() => null)
+          )
+        }
+
+        // For morning star (rise before sunrise): get altitude at sunrise
+        if (dayData.rise && sunDay.sunrise) {
+          const datetime = `${dayData.date} ${sunDay.sunrise.substring(0, 5)}`
+          altitudePromises.push(
+            axios.get('http://localhost:3000/api/celestial-position', {
+              params: {
+                lat: latitude.value,
+                lon: longitude.value,
+                planet: planet,
+                datetime: datetime
+              }
+            }).then(res => ({
+              date: dayData.date,
+              type: 'sunrise',
+              altitude: res.data.altitude
+            })).catch(() => null)
+          )
+        }
+      }
+
+      // Execute all altitude requests in parallel (batch)
+      const altitudeResults = await Promise.all(altitudePromises)
+      altitudeResults.forEach(result => {
+        if (result) {
+          if (!altitudes[result.date]) altitudes[result.date] = {}
+          altitudes[result.date][result.type] = result.altitude
+        }
+      })
+
+      innerPlanetAltitudes.value[planet] = altitudes
+    }
+
+    // Fetch equinox data if near polar regions (abs(lat) > 89.4)
+    if (Math.abs(latitude.value) > 89.4) {
+      try {
+        const equinoxResponse = await axios.get('http://localhost:3000/api/equinoxes', {
+          params: { year: year.value }
+        })
+        equinoxData.value = equinoxResponse.data
+      } catch (err) {
+        console.warn('Failed to fetch equinox data:', err.message)
+        equinoxData.value = null
+      }
+    } else {
+      equinoxData.value = null
+    }
+
     // Wait for DOM update and create plot
     await nextTick()
     createPlot(sunResponse.data)
@@ -278,61 +366,102 @@ const createPlanetTraces = (sunData, offset) => {
   // This handles polar night/day transitions correctly
   const nightBoundaries = [] // Array of {dayOfYear, left, right} where left <= x <= right is night
 
-  let polarNight = true
-  let polarDay = false
-  let polarDayEnd = false
+  // Check if we should use equinox-based polar logic
+  const usePolarEquinoxLogic = Math.abs(latitude.value) > 89.4 && equinoxData.value
 
-  sunData.forEach((d, i) => {
-    const nextDayData = sunData[i + 1]
-    if (!nextDayData) return
+  if (usePolarEquinoxLogic) {
+    // Use equinox data for polar regions
+    const springDay = equinoxData.value.springEquinox?.dayOfYear || 80
+    const autumnDay = equinoxData.value.autumnEquinox?.dayOfYear || 266
+    const isNorthPole = latitude.value > 0
 
-    const dayOfYear = i + 1
+    sunData.forEach((d, i) => {
+      const nextDayData = sunData[i + 1]
+      if (!nextDayData) return
 
-    // Calculate sunset and sunrise in plot coordinates (same as sun visualization)
-    let sunset = d.error ? null : clip(timeToHours(d.sunset) + offset)
-    let sunrise = nextDayData.error ? null : clip(timeToHours(nextDayData.sunrise) + offset)
-    sunrise = !sunset ? null : sunrise
-    sunset = !sunrise ? null : sunset
-    if (sunset !== null && sunrise !== null && sunset > sunrise) {
-      sunset = null
-      sunrise = null
-    }
+      const dayOfYear = i + 1
+      let nightLeft = null
+      let nightRight = null
 
-    // Apply polar night/day state machine (same as sun visualization)
-    let nightLeft = null
-    let nightRight = null
+      // For North Pole: polar night before spring equinox and after autumn equinox
+      // For South Pole: polar night between spring and autumn equinox
+      const isPolarNight = isNorthPole
+        ? (dayOfYear < springDay || dayOfYear >= autumnDay)
+        : (dayOfYear >= springDay && dayOfYear < autumnDay)
 
-    if (sunset === null || sunrise === null) {
-      if (polarNight) {
+      if (isPolarNight) {
         nightLeft = plotLeft
         nightRight = plotRight
-      } else if (polarDayEnd) {
-        polarNight = true
-        polarDayEnd = false
-        nightLeft = plotLeft
-        nightRight = plotRight
-      } else {
-        polarDay = true
-        // No night region during polar day
-        nightLeft = null
-        nightRight = null
       }
-    } else {
-      polarNight = false
-      if (polarDay) {
-        polarDay = false
-        polarDayEnd = true
-      }
-      nightLeft = sunset
-      nightRight = sunrise
-    }
+      // else: polar day, no night region (nightLeft/nightRight stay null)
 
-    nightBoundaries.push({
-      dayOfYear,
-      left: nightLeft,
-      right: nightRight
+      nightBoundaries.push({
+        dayOfYear,
+        left: nightLeft,
+        right: nightRight
+      })
     })
-  })
+  } else {
+    // Use standard state machine for non-polar regions
+    // Initialize based on hemisphere: northern starts in polar night (Jan=winter),
+    // southern starts in polar day (Jan=summer)
+    const isNorthernHemisphere = latitude.value >= 0
+    let polarNight = isNorthernHemisphere
+    let polarDay = !isNorthernHemisphere
+    let polarDayEnd = false
+
+    sunData.forEach((d, i) => {
+      const nextDayData = sunData[i + 1]
+      if (!nextDayData) return
+
+      const dayOfYear = i + 1
+
+      // Calculate sunset and sunrise in plot coordinates (same as sun visualization)
+      let sunset = d.error ? null : clip(timeToHours(d.sunset) + offset)
+      let sunrise = nextDayData.error ? null : clip(timeToHours(nextDayData.sunrise) + offset)
+      sunrise = !sunset ? null : sunrise
+      sunset = !sunrise ? null : sunset
+      if (sunset !== null && sunrise !== null && sunset > sunrise) {
+        sunset = null
+        sunrise = null
+      }
+
+      // Apply polar night/day state machine (same as sun visualization)
+      let nightLeft = null
+      let nightRight = null
+
+      if (sunset === null || sunrise === null) {
+        if (polarNight) {
+          nightLeft = plotLeft
+          nightRight = plotRight
+        } else if (polarDayEnd) {
+          polarNight = true
+          polarDayEnd = false
+          nightLeft = plotLeft
+          nightRight = plotRight
+        } else {
+          polarDay = true
+          // No night region during polar day
+          nightLeft = null
+          nightRight = null
+        }
+      } else {
+        polarNight = false
+        if (polarDay) {
+          polarDay = false
+          polarDayEnd = true
+        }
+        nightLeft = sunset
+        nightRight = sunrise
+      }
+
+      nightBoundaries.push({
+        dayOfYear,
+        left: nightLeft,
+        right: nightRight
+      })
+    })
+  }
 
   // Helper to check if a point is within the night region
   const isInNightRegion = (x, dayOfYear) => {
@@ -348,6 +477,9 @@ const createPlanetTraces = (sunData, offset) => {
     const pData = planetData.value[planet] || []
     if (pData.length === 0) return
 
+    // Get altitude data for this planet
+    const altitudes = innerPlanetAltitudes.value[planet] || {}
+
     const riseXValues = []
     const riseYValues = []
     const setXValues = []
@@ -358,6 +490,8 @@ const createPlanetTraces = (sunData, offset) => {
     const setTexts = []
     const riseAzimuths = []
     const setAzimuths = []
+    const riseAltitudes = []  // Altitude at sunrise (morning star)
+    const setAltitudes = []   // Altitude at sunset (evening star)
 
     pData.forEach((d, i) => {
       if (d.error) return
@@ -373,28 +507,35 @@ const createPlanetTraces = (sunData, offset) => {
       // Skip if set is later than rise (same check as sun)
       if (setX > riseX) return
 
+      // Get altitude data for this date
+      const dayAltitudes = altitudes[d.date] || {}
+
       // Only show if within the night region (shaded area)
+      // Rise in night = morning star, show altitude at sunrise
       if (isInNightRegion(riseX, dayOfYear)) {
         riseXValues.push(riseX)
         riseYValues.push(dayOfYear)
         riseDates.push(d.date)
         riseTexts.push(shiftTime(d.rise, getTimeZone()))
-        riseAzimuths.push(d.riseAzimuth?.toFixed(1) ?? "")
+        riseAzimuths.push(d.riseAzimuth != null ? `${d.riseAzimuth.toFixed(1)}°` : "N/A")
+        riseAltitudes.push(dayAltitudes.sunrise != null ? `${dayAltitudes.sunrise.toFixed(1)}°` : "N/A")
       }
+      // Set in night = evening star, show altitude at sunset
       if (isInNightRegion(setX, dayOfYear)) {
         setXValues.push(setX)
         setYValues.push(dayOfYear)
         setDates.push(d.date)
         setTexts.push(shiftTime(d.set, getTimeZone()))
-        setAzimuths.push(d.setAzimuth?.toFixed(1) ?? "")
+        setAzimuths.push(d.setAzimuth != null ? `${d.setAzimuth.toFixed(1)}°` : "N/A")
+        setAltitudes.push(dayAltitudes.sunset != null ? `${dayAltitudes.sunset.toFixed(1)}°` : "N/A")
       }
     })
 
     // Split data at discontinuities (large jumps in x values)
-    const riseSegments = splitDataAtDiscontinuities(riseXValues, riseYValues, riseDates, riseTexts, riseAzimuths)
-    const setSegments = splitDataAtDiscontinuities(setXValues, setYValues, setDates, setTexts, setAzimuths)
+    const riseSegments = splitDataAtDiscontinuities(riseXValues, riseYValues, riseDates, riseTexts, riseAzimuths, riseAltitudes)
+    const setSegments = splitDataAtDiscontinuities(setXValues, setYValues, setDates, setTexts, setAzimuths, setAltitudes)
 
-    // Add rise traces
+    // Add rise traces (morning star - show altitude at sunrise)
     riseSegments.forEach(seg => {
       if (seg.x.length > 1) {
         traces.push({
@@ -405,15 +546,16 @@ const createPlanetTraces = (sunData, offset) => {
           line: { color: planetColors[planet], width: 2 },
           legendgroup: planet,
           showlegend: false,
-          hovertemplate: `${capitalize(planet)} Rise<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}°<extra></extra>`,
+          hovertemplate: `${capitalize(planet)} Rise (Morning Star)<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}<br>Altitude at sunrise: %{hovertext}<extra></extra>`,
           customdata: seg.dates.map(d => formatDateStr(d)),
           text: seg.texts,
-          meta: seg.azimuths
+          meta: seg.azimuths,
+          hovertext: seg.altitudes || []
         })
       }
     })
 
-    // Add set traces
+    // Add set traces (evening star - show altitude at sunset)
     setSegments.forEach(seg => {
       if (seg.x.length > 1) {
         traces.push({
@@ -424,10 +566,11 @@ const createPlanetTraces = (sunData, offset) => {
           line: { color: planetColors[planet], width: 2 },
           legendgroup: planet,
           showlegend: false,
-          hovertemplate: `${capitalize(planet)} Set<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}°<extra></extra>`,
+          hovertemplate: `${capitalize(planet)} Set (Evening Star)<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}<br>Altitude at sunset: %{hovertext}<extra></extra>`,
           customdata: seg.dates.map(d => formatDateStr(d)),
           text: seg.texts,
-          meta: seg.azimuths
+          meta: seg.azimuths,
+          hovertext: seg.altitudes || []
         })
       }
     })
@@ -473,8 +616,8 @@ const createPlanetTraces = (sunData, offset) => {
         transitDates.push(d.date)
         transitTexts.push(shiftTime(d.transit, getTimeZone()))
         // Store altitude from API for hover display
-        const alt = d.transitAltitude?.toFixed(1) ?? ""
-        transitMetas.push(`Altitude: ${alt}°`)
+        const alt = d.transitAltitude != null ? `${d.transitAltitude.toFixed(1)}°` : "N/A"
+        transitMetas.push(`Altitude: ${alt}`)
       }
     })
 
@@ -527,57 +670,96 @@ const createMoonTracesAndImages = (sunData, offset) => {
 
   // Build night boundaries for positioning (same as planet traces)
   const nightBoundaries = []
-  let polarNight = true
-  let polarDay = false
-  let polarDayEnd = false
 
-  sunData.forEach((d, i) => {
-    const nextDayData = sunData[i + 1]
-    if (!nextDayData) return
+  // Check if we should use equinox-based polar logic
+  const usePolarEquinoxLogic = Math.abs(latitude.value) > 89.4 && equinoxData.value
 
-    const dayOfYear = i + 1
-    let sunset = d.error ? null : clip(timeToHours(d.sunset) + offset)
-    let sunrise = nextDayData.error ? null : clip(timeToHours(nextDayData.sunrise) + offset)
-    sunrise = !sunset ? null : sunrise
-    sunset = !sunrise ? null : sunset
-    if (sunset !== null && sunrise !== null && sunset > sunrise) {
-      sunset = null
-      sunrise = null
-    }
+  if (usePolarEquinoxLogic) {
+    // Use equinox data for polar regions
+    const springDay = equinoxData.value.springEquinox?.dayOfYear || 80
+    const autumnDay = equinoxData.value.autumnEquinox?.dayOfYear || 266
+    const isNorthPole = latitude.value > 0
 
-    let nightLeft = null
-    let nightRight = null
+    sunData.forEach((d, i) => {
+      const nextDayData = sunData[i + 1]
+      if (!nextDayData) return
 
-    if (sunset === null || sunrise === null) {
-      if (polarNight) {
+      const dayOfYear = i + 1
+      let nightLeft = null
+      let nightRight = null
+
+      const isPolarNight = isNorthPole
+        ? (dayOfYear < springDay || dayOfYear >= autumnDay)
+        : (dayOfYear >= springDay && dayOfYear < autumnDay)
+
+      if (isPolarNight) {
         nightLeft = 0
         nightRight = 24
-      } else if (polarDayEnd) {
-        polarNight = true
-        polarDayEnd = false
-        nightLeft = 0
-        nightRight = 24
-      } else {
-        polarDay = true
-        nightLeft = null
-        nightRight = null
       }
-    } else {
-      polarNight = false
-      if (polarDay) {
-        polarDay = false
-        polarDayEnd = true
-      }
-      nightLeft = sunset
-      nightRight = sunrise
-    }
 
-    nightBoundaries.push({
-      dayOfYear,
-      left: nightLeft,
-      right: nightRight
+      nightBoundaries.push({
+        dayOfYear,
+        left: nightLeft,
+        right: nightRight
+      })
     })
-  })
+  } else {
+    // Use standard state machine for non-polar regions
+    // Initialize based on hemisphere: northern starts in polar night (Jan=winter),
+    // southern starts in polar day (Jan=summer)
+    const isNorthernHemisphere = latitude.value >= 0
+    let polarNight = isNorthernHemisphere
+    let polarDay = !isNorthernHemisphere
+    let polarDayEnd = false
+
+    sunData.forEach((d, i) => {
+      const nextDayData = sunData[i + 1]
+      if (!nextDayData) return
+
+      const dayOfYear = i + 1
+      let sunset = d.error ? null : clip(timeToHours(d.sunset) + offset)
+      let sunrise = nextDayData.error ? null : clip(timeToHours(nextDayData.sunrise) + offset)
+      sunrise = !sunset ? null : sunrise
+      sunset = !sunrise ? null : sunset
+      if (sunset !== null && sunrise !== null && sunset > sunrise) {
+        sunset = null
+        sunrise = null
+      }
+
+      let nightLeft = null
+      let nightRight = null
+
+      if (sunset === null || sunrise === null) {
+        if (polarNight) {
+          nightLeft = 0
+          nightRight = 24
+        } else if (polarDayEnd) {
+          polarNight = true
+          polarDayEnd = false
+          nightLeft = 0
+          nightRight = 24
+        } else {
+          polarDay = true
+          nightLeft = null
+          nightRight = null
+        }
+      } else {
+        polarNight = false
+        if (polarDay) {
+          polarDay = false
+          polarDayEnd = true
+        }
+        nightLeft = sunset
+        nightRight = sunrise
+      }
+
+      nightBoundaries.push({
+        dayOfYear,
+        left: nightLeft,
+        right: nightRight
+      })
+    })
+  }
 
   // Find the best day for each phase (closest to nominal elongation)
   const phaseOccurrences = {}
@@ -811,9 +993,9 @@ const getMoonImageSrc = (phaseName) => {
 };
 
 // Split data arrays at discontinuities (large jumps)
-const splitDataAtDiscontinuities = (xValues, yValues, dates, texts, azimuths = null) => {
+const splitDataAtDiscontinuities = (xValues, yValues, dates, texts, azimuths = null, altitudes = null) => {
   const segments = []
-  let currentSegment = { x: [], y: [], dates: [], texts: [], azimuths: [] }
+  let currentSegment = { x: [], y: [], dates: [], texts: [], azimuths: [], altitudes: [] }
 
   for (let i = 0; i < xValues.length; i++) {
     if (currentSegment.x.length === 0) {
@@ -822,6 +1004,7 @@ const splitDataAtDiscontinuities = (xValues, yValues, dates, texts, azimuths = n
       currentSegment.dates.push(dates[i])
       currentSegment.texts.push(texts[i])
       if (azimuths) currentSegment.azimuths.push(azimuths[i])
+      if (altitudes) currentSegment.altitudes.push(altitudes[i])
     } else {
       const lastX = currentSegment.x[currentSegment.x.length - 1]
       const lastY = currentSegment.y[currentSegment.y.length - 1]
@@ -830,13 +1013,14 @@ const splitDataAtDiscontinuities = (xValues, yValues, dates, texts, azimuths = n
         if (currentSegment.x.length > 0) {
           segments.push(currentSegment)
         }
-        currentSegment = { x: [], y: [], dates: [], texts: [], azimuths: [] }
+        currentSegment = { x: [], y: [], dates: [], texts: [], azimuths: [], altitudes: [] }
       }
       currentSegment.x.push(xValues[i])
       currentSegment.y.push(yValues[i])
       currentSegment.dates.push(dates[i])
       currentSegment.texts.push(texts[i])
       if (azimuths) currentSegment.azimuths.push(azimuths[i])
+      if (altitudes) currentSegment.altitudes.push(altitudes[i])
     }
   }
 
@@ -942,10 +1126,10 @@ const createPlot = (data) => {
     },
     legendgroup: 'sun',
     showlegend: false,
-    hovertemplate: 'Sunset<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}°<extra></extra>',
+    hovertemplate: 'Sunset<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}<extra></extra>',
     customdata: yValues.map(day => formatDay(day)),
     text: data.slice(0, -1).map(d => d.error ? "" : shiftTime(d.sunset, getTimeZone())),
-    meta: data.slice(0, -1).map(d => d.error ? "" : d.sunsetAzimuth?.toFixed(1) ?? "")
+    meta: data.slice(0, -1).map(d => d.error ? "" : (d.sunsetAzimuth != null ? `${d.sunsetAzimuth.toFixed(1)}°` : "N/A"))
   }
 
   const sunriseTrace = {
@@ -959,50 +1143,93 @@ const createPlot = (data) => {
     },
     legendgroup: 'sun',
     showlegend: false,
-    hovertemplate: 'Sunrise<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}°<extra></extra>',
+    hovertemplate: 'Sunrise<br>%{customdata}<br>%{text}<br>Azimuth: %{meta}<extra></extra>',
     customdata: yValues.map(day => formatDay(day)),
     text: data.slice(1).map(d => d.error ? "" : shiftTime(d.sunrise, getTimeZone())),
-    meta: data.slice(1).map(d => d.error ? "" : d.sunriseAzimuth?.toFixed(1) ?? "")
+    meta: data.slice(1).map(d => d.error ? "" : (d.sunriseAzimuth != null ? `${d.sunriseAzimuth.toFixed(1)}°` : "N/A"))
   }
 
-  let polarNight = true
-  let polarDay = false
-  let polarDayEnd = false
   // Create night duration bars (horizontal lines between curves)
   const nightBars = []
-  sunsetXValues.forEach((sunsetX, i) => {
-    let sunriseX = sunriseXValues[i]
-    if (!sunsetX || !sunriseX) {
-        if (polarNight) {
-            sunsetX = plotLeft
-            sunriseX = plotRight
-        } else if (polarDayEnd) {
-            polarNight = true
-            polarDayEnd = false
-            sunsetX = plotLeft
-            sunriseX = plotRight
-        } else {
-            polarDay = true
-        }
-    } else {
-        polarNight = false
-        if (polarDay) {
-            polarDay = false
-            polarDayEnd = true
-        }
-    }
-    nightBars.push({
-      x: [sunsetX, sunriseX],
-      y: [yValues[i], yValues[i]],
-      mode: 'lines',
-      line: {
-        color: 'rgba(200, 200, 255, 0.3)',
-        width: 1
-      },
-      showlegend: false,
-      hoverinfo: 'skip'
+
+  // Check if we should use equinox-based polar logic
+  const usePolarEquinoxLogic = Math.abs(latitude.value) > 89.4 && equinoxData.value
+
+  if (usePolarEquinoxLogic) {
+    // Use equinox data for polar regions
+    const springDay = equinoxData.value.springEquinox?.dayOfYear || 80
+    const autumnDay = equinoxData.value.autumnEquinox?.dayOfYear || 266
+    const isNorthPole = latitude.value > 0
+
+    sunsetXValues.forEach((sunsetX, i) => {
+      const dayOfYear = yValues[i]
+
+      // For North Pole: polar night before spring equinox and after autumn equinox
+      // For South Pole: polar night between spring and autumn equinox
+      const isPolarNight = isNorthPole
+        ? (dayOfYear < springDay || dayOfYear >= autumnDay)
+        : (dayOfYear >= springDay && dayOfYear < autumnDay)
+
+      if (isPolarNight) {
+        nightBars.push({
+          x: [plotLeft, plotRight],
+          y: [dayOfYear, dayOfYear],
+          mode: 'lines',
+          line: {
+            color: 'rgba(200, 200, 255, 0.3)',
+            width: 1
+          },
+          showlegend: false,
+          hoverinfo: 'skip'
+        })
+      }
+      // During polar day, no night bar is added
     })
-  })
+  } else {
+    // Use standard state machine for non-polar regions
+    // Initialize based on hemisphere: northern starts in polar night (Jan=winter),
+    // southern starts in polar day (Jan=summer)
+    const isNorthernHemisphere = latitude.value >= 0
+    let polarNight = isNorthernHemisphere
+    let polarDay = !isNorthernHemisphere
+    let polarDayEnd = false
+
+    sunsetXValues.forEach((sunsetX, i) => {
+      let sunriseX = sunriseXValues[i]
+      if (!sunsetX || !sunriseX) {
+          if (polarNight) {
+              sunsetX = plotLeft
+              sunriseX = plotRight
+          } else if (polarDayEnd) {
+              polarNight = true
+              polarDayEnd = false
+              sunsetX = plotLeft
+              sunriseX = plotRight
+          } else {
+              polarDay = true
+          }
+      } else {
+          polarNight = false
+          if (polarDay) {
+              polarDay = false
+              polarDayEnd = true
+          }
+      }
+      if (sunsetX !== null && sunriseX !== null) {
+        nightBars.push({
+          x: [sunsetX, sunriseX],
+          y: [yValues[i], yValues[i]],
+          mode: 'lines',
+          line: {
+            color: 'rgba(200, 200, 255, 0.3)',
+            width: 1
+          },
+          showlegend: false,
+          hoverinfo: 'skip'
+        })
+      }
+    })
+  }
 
   // Create planet traces
   const planetTraces = createPlanetTraces(data, offset)
