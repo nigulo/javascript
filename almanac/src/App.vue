@@ -210,7 +210,7 @@ const generateAlmanac = async () => {
     const endDate = `${year.value}-12-31`
 
     // Call EphemAPI for sun data
-    const sunResponse = await axios.get('http://localhost:3000/api/sunrise-sunset', {
+    const sunResponse = await axios.get('/api/sunrise-sunset', {
       params: {
         lat: latitude.value,
         lon: longitude.value,
@@ -219,11 +219,12 @@ const generateAlmanac = async () => {
       }
     })
 
-    plotData.value = sunResponse.data
+    const sunData = Array.isArray(sunResponse.data) ? sunResponse.data : []
+    plotData.value = sunData
 
     // Fetch planet data for all planets in parallel
     const planetPromises = allPlanets.map(planet =>
-      axios.get('http://localhost:3000/api/planet-rise-set-transit', {
+      axios.get('/api/planet-rise-set-transit', {
         params: {
           lat: latitude.value,
           lon: longitude.value,
@@ -246,7 +247,7 @@ const generateAlmanac = async () => {
 
     // Fetch moon phase data
     try {
-      const moonResponse = await axios.get('http://localhost:3000/api/moon-phase', {
+      const moonResponse = await axios.get('/api/moon-phase', {
         params: {
           lat: latitude.value,
           lon: longitude.value,
@@ -254,83 +255,73 @@ const generateAlmanac = async () => {
           endDate: endDate
         }
       })
-      moonData.value = moonResponse.data
+      moonData.value = Array.isArray(moonResponse.data) ? moonResponse.data : []
     } catch (err) {
       console.warn('Failed to fetch moon data:', err.message)
       moonData.value = []
     }
 
     // Fetch altitude data for inner planets (Mercury, Venus) at sunrise/sunset times
+    // Build batch request for all planets and datetimes
     innerPlanetAltitudes.value = {}
-    for (const planet of innerPlanets) {
-      const pData = planetData.value[planet] || []
-      const altitudes = {}
+    const batchRequests = []
+    const requestMeta = []  // Track planet, date, type for each request
 
-      // Build batch requests for altitude at sunrise and sunset
-      const altitudePromises = []
+    for (const planet of innerPlanets) {
+      const pData = Array.isArray(planetData.value[planet]) ? planetData.value[planet] : []
 
       for (const dayData of pData) {
         if (dayData.error) continue
 
         // Find matching sun data for this date
-        const sunDay = sunResponse.data.find(s => s.date === dayData.date)
+        const sunDay = sunData.find(s => s.date === dayData.date)
         if (!sunDay || sunDay.error) continue
 
         // For evening star (set after sunset): get altitude at sunset
         if (dayData.set && sunDay.sunset) {
           const datetime = `${dayData.date} ${sunDay.sunset.substring(0, 5)}`
-          altitudePromises.push(
-            axios.get('http://localhost:3000/api/celestial-position', {
-              params: {
-                lat: latitude.value,
-                lon: longitude.value,
-                planet: planet,
-                datetime: datetime
-              }
-            }).then(res => ({
-              date: dayData.date,
-              type: 'sunset',
-              altitude: res.data.altitude
-            })).catch(() => null)
-          )
+          batchRequests.push({ planet, datetime })
+          requestMeta.push({ planet, date: dayData.date, type: 'sunset' })
         }
 
         // For morning star (rise before sunrise): get altitude at sunrise
         if (dayData.rise && sunDay.sunrise) {
           const datetime = `${dayData.date} ${sunDay.sunrise.substring(0, 5)}`
-          altitudePromises.push(
-            axios.get('http://localhost:3000/api/celestial-position', {
-              params: {
-                lat: latitude.value,
-                lon: longitude.value,
-                planet: planet,
-                datetime: datetime
-              }
-            }).then(res => ({
-              date: dayData.date,
-              type: 'sunrise',
-              altitude: res.data.altitude
-            })).catch(() => null)
-          )
+          batchRequests.push({ planet, datetime })
+          requestMeta.push({ planet, date: dayData.date, type: 'sunrise' })
         }
       }
+    }
 
-      // Execute all altitude requests in parallel (batch)
-      const altitudeResults = await Promise.all(altitudePromises)
-      altitudeResults.forEach(result => {
-        if (result) {
-          if (!altitudes[result.date]) altitudes[result.date] = {}
-          altitudes[result.date][result.type] = result.altitude
-        }
-      })
+    // Execute single batch request
+    if (batchRequests.length > 0) {
+      try {
+        const batchResponse = await axios.post('/api/celestial-positions', {
+          lat: latitude.value,
+          lon: longitude.value,
+          requests: batchRequests
+        })
 
-      innerPlanetAltitudes.value[planet] = altitudes
+        // Process results and organize by planet
+        batchResponse.data.forEach((result, index) => {
+          const meta = requestMeta[index]
+          if (!innerPlanetAltitudes.value[meta.planet]) {
+            innerPlanetAltitudes.value[meta.planet] = {}
+          }
+          if (!innerPlanetAltitudes.value[meta.planet][meta.date]) {
+            innerPlanetAltitudes.value[meta.planet][meta.date] = {}
+          }
+          innerPlanetAltitudes.value[meta.planet][meta.date][meta.type] = result.altitude
+        })
+      } catch (err) {
+        console.warn('Failed to fetch batch altitude data:', err.message)
+      }
     }
 
     // Fetch equinox data if near polar regions (abs(lat) > 89.4)
     if (Math.abs(latitude.value) > 89.4) {
       try {
-        const equinoxResponse = await axios.get('http://localhost:3000/api/equinoxes', {
+        const equinoxResponse = await axios.get('/api/equinoxes', {
           params: { year: year.value }
         })
         equinoxData.value = equinoxResponse.data
@@ -344,7 +335,7 @@ const generateAlmanac = async () => {
 
     // Wait for DOM update and create plot
     await nextTick()
-    createPlot(sunResponse.data)
+    createPlot(sunData)
 
   } catch (err) {
     error.value = `Failed to fetch data: ${err.message}`
@@ -474,7 +465,7 @@ const createPlanetTraces = (sunData, offset) => {
 
   // Process inner planets (Mercury, Venus) - show rise and set times
   innerPlanets.forEach(planet => {
-    const pData = planetData.value[planet] || []
+    const pData = Array.isArray(planetData.value[planet]) ? planetData.value[planet] : []
     if (pData.length === 0) return
 
     // Get altitude data for this planet
@@ -589,7 +580,7 @@ const createPlanetTraces = (sunData, offset) => {
 
   // Process outer planets (Mars, Jupiter, Saturn, Uranus, Neptune, Pluto) - show transit times
   outerPlanets.forEach(planet => {
-    const pData = planetData.value[planet] || []
+    const pData = Array.isArray(planetData.value[planet]) ? planetData.value[planet] : []
     if (pData.length === 0) return
 
     const transitXValues = []
@@ -666,7 +657,7 @@ const createMoonTracesAndImages = (sunData, offset) => {
   const images = []
   const isLeapYear = (year.value % 4 === 0 && year.value % 100 !== 0) || (year.value % 400 === 0)
 
-  if (!moonData.value || moonData.value.length === 0) {
+  if (!Array.isArray(moonData.value) || moonData.value.length === 0) {
     return [traces, images]
   }
 
@@ -1503,7 +1494,9 @@ input:focus {
 
 .plot-container {
   width: 100%;
+  max-width: 600px;
   height: 850px;
+  margin: 0 auto;
 }
 
 .error-msg {
